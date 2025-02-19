@@ -352,13 +352,7 @@ run_loop(ggate_context_t ggate, nbd_client_t nbd)
 	ctx = &context;
 	current_state = loop_init(ctx, ggate, nbd, &buf[0], sizeof buf);
 
-	for (;;) {
-		if (disconnect) {
-			nbd_client_set_disconnect(ctx->nbd, true);
-			ggate_context_cancel(ggate, context.ggio.gctl_seq);
-			break;
-		}
-
+	while (!disconnect) {
 		switch (current_state) {
 		case SETUP:
 			current_state = loop_setup(ctx);
@@ -394,6 +388,8 @@ run_loop(ggate_context_t ggate, nbd_client_t nbd)
 		}
 	}
 
+	nbd_client_set_disconnect(ctx->nbd, true);
+	ggate_context_cancel(ggate, context.ggio.gctl_seq);
 	return SUCCESS;
 }
 
