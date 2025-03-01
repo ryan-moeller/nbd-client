@@ -768,7 +768,6 @@ static int
 nbd_client_negotiate_options_fixed_newstyle(struct nbd_client *client)
 {
 	struct nbd_option option;
-	struct nbd_option_reply reply;
 	struct nbd_export_info info;
 
 	nbd_option_init(&option);
