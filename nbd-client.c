@@ -544,7 +544,7 @@ nbd_option_reply_is_valid(struct nbd_option_reply *reply,
 
 	opt = be32toh(option->option);
 
-	assert(option->option != NBD_OPTION_EXPORT_NAME);
+	assert(opt != NBD_OPTION_EXPORT_NAME);
 
 	if (reply->magic != NBD_OPTION_REPLY_MAGIC) {
 		syslog(LOG_ERR,
