@@ -8,10 +8,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-#ifdef HAVE_LIBCASPER
 #include <libcasper.h>
 #include <casper/cap_dns.h>
-#endif
 
 #include <geom/gate/g_gate.h>
 
@@ -393,7 +391,6 @@ run_loop(ggate_context_t ggate, nbd_client_t nbd)
 	return SUCCESS;
 }
 
-#ifdef HAVE_LIBCASPER
 static int
 casper_dns_lookup(char const *host, char const *port, struct addrinfo *hints,
     struct addrinfo **res)
@@ -426,7 +423,6 @@ casper_dns_lookup(char const *host, char const *port, struct addrinfo *hints,
 
 	return SUCCESS;
 }
-#endif
 
 static int
 enter_capability_mode()
@@ -543,17 +539,8 @@ main(int argc, char *argv[])
 	hints.ai_flags = AI_CANONNAME;
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
-#ifdef HAVE_LIBCASPER
 	if (casper_dns_lookup(host, port, &hints, &ai) == FAILURE)
 		goto close;
-#else
-	result = getaddrinfo(host, port, &hints, &ai);
-	if (result != SUCCESS) {
-		syslog(LOG_ERR, "%s: failed to locate server (%s:%s): %s",
-		       __func__, host, port, gai_strerror(result));
-		goto close;
-	}
-#endif
 
 	result = nbd_client_connect(nbd, ai);
 	freeaddrinfo(ai);
