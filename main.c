@@ -395,7 +395,8 @@ run_loop(ggate_context_t ggate, nbd_client_t nbd)
 
 #ifdef HAVE_LIBCASPER
 static int
-casper_dns_lookup(char const *host, char const *port, struct addrinfo **res)
+casper_dns_lookup(char const *host, char const *port, struct addrinfo *hints,
+    struct addrinfo **res)
 {
 	cap_channel_t *casper, *casper_dns;
 	int result;
@@ -415,7 +416,7 @@ casper_dns_lookup(char const *host, char const *port, struct addrinfo **res)
 		return FAILURE;
 	}
 
-	result = cap_getaddrinfo(casper_dns, host, port, NULL, res);
+	result = cap_getaddrinfo(casper_dns, host, port, hints, res);
 	cap_close(casper_dns);
 	if (result != SUCCESS) {
 		syslog(LOG_ERR, "%s: failed to lookup address (%s:%s): %s",
@@ -449,7 +450,7 @@ main(int argc, char *argv[])
 	nbd_client_t nbd;
 	char const *host, *port;
 	char ident[128]; // arbitrary length limit
-	struct addrinfo *ai;
+	struct addrinfo hints, *ai;
 	uint64_t size;
 	bool daemonize;
 	int result, retval;
@@ -538,11 +539,15 @@ main(int argc, char *argv[])
 	 * Connect to the nbd server.
 	 */
 
+	memset(&hints, 0, sizeof hints);
+	hints.ai_flags = AI_CANONNAME;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
 #ifdef HAVE_LIBCASPER
-	if (casper_dns_lookup(host, port, &ai) == FAILURE)
+	if (casper_dns_lookup(host, port, &hints, &ai) == FAILURE)
 		goto close;
 #else
-	result = getaddrinfo(host, port, NULL, &ai);
+	result = getaddrinfo(host, port, &hints, &ai);
 	if (result != SUCCESS) {
 		syslog(LOG_ERR, "%s: failed to locate server (%s:%s): %s",
 		       __func__, host, port, gai_strerror(result));
