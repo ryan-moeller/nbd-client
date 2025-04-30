@@ -26,26 +26,26 @@
  */
 
 #define NBD_MAGIC 0x4e42444d41474943UL
-
 #define NBD_OLDSTYLE_MAGIC 0x00420281861253UL
+#define NBD_NEWSTYLE_MAGIC 0x49484156454F5054UL
+
+struct nbd_handshake_magic {
+	uint64_t magic;
+	uint64_t style;
+} __packed;
+
 
 struct nbd_oldstyle_negotiation {
-	uint64_t magic;
-	uint64_t oldstyle_magic;
 	uint64_t size;
 	uint32_t flags;
 	uint8_t reserved[124];
 } __packed;
 
 
-#define NBD_NEWSTYLE_MAGIC 0x49484156454F5054UL
-
 #define NBD_FLAG_FIXED_NEWSTYLE (1 << 0)
 #define NBD_FLAG_NO_ZEROES      (1 << 1)
 
 struct nbd_newstyle_negotiation {
-	uint64_t magic;
-	uint64_t newstyle_magic;
 	uint16_t handshake_flags;
 } __packed;
 

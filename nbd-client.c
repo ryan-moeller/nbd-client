@@ -248,8 +248,6 @@ static inline void
 nbd_oldstyle_negotiation_ntoh(struct nbd_oldstyle_negotiation *handshake)
 {
 
-	handshake->magic = be64toh(handshake->magic);
-	handshake->oldstyle_magic = be64toh(handshake->oldstyle_magic);
 	handshake->size = be64toh(handshake->size);
 	handshake->flags = be32toh(handshake->flags);
 }
@@ -258,18 +256,6 @@ static inline bool
 nbd_oldstyle_negotiation_is_valid(struct nbd_oldstyle_negotiation *handshake)
 {
 
-	if (handshake->magic != NBD_MAGIC) {
-		syslog(LOG_ERR,
-		       "%s: invalid magic: %#018lx (expected %#018lx)",
-		       __func__, handshake->magic, NBD_MAGIC);
-		return false;
-	}
-	if (handshake->oldstyle_magic != NBD_OLDSTYLE_MAGIC) {
-		syslog(LOG_ERR,
-		       "%s: invalid oldstyle magic: %#018lx (expected %#018lx)",
-		       __func__, handshake->oldstyle_magic, NBD_OLDSTYLE_MAGIC);
-		return false;
-	}
 	if (!(handshake->flags & NBD_FLAG_HAS_FLAGS)) {
 		syslog(LOG_ERR,
 		       "%s: invalid flags: %#010x (expected low bit set)",
@@ -285,9 +271,6 @@ nbd_oldstyle_negotiation_dump(struct nbd_oldstyle_negotiation *handshake)
 {
 	uint32_t flags = handshake->flags;
 
-	syslog(LOG_DEBUG, "\tmagic: %#018lx", handshake->magic);
-	syslog(LOG_DEBUG, "\toldstyle_magic: %#018lx",
-	       handshake->oldstyle_magic);
 	syslog(LOG_DEBUG, "\tsize: %lu", handshake->size);
 	syslog(LOG_DEBUG, "\tflags: %#010x%s", flags,
 	       (flags & NBD_FLAG_HAS_FLAGS) ? "" : " (invalid)");
@@ -346,8 +329,6 @@ static inline void
 nbd_newstyle_negotiation_ntoh(struct nbd_newstyle_negotiation *handshake)
 {
 
-	handshake->magic = be64toh(handshake->magic);
-	handshake->newstyle_magic = be64toh(handshake->newstyle_magic);
 	handshake->handshake_flags = be16toh(handshake->handshake_flags);
 }
 
@@ -358,18 +339,6 @@ nbd_newstyle_negotiation_is_valid(struct nbd_newstyle_negotiation *handshake)
 {
 	uint16_t flags = handshake->handshake_flags;
 
-	if (handshake->magic != NBD_MAGIC) {
-		syslog(LOG_ERR,
-		       "%s: invalid magic: %#018lx (expected %#018lx)",
-		       __func__, handshake->magic, NBD_MAGIC);
-		return false;
-	}
-	if (handshake->newstyle_magic != NBD_NEWSTYLE_MAGIC) {
-		syslog(LOG_ERR,
-		       "%s: invalid newstyle magic: %#018lx (expected %#018lx)",
-		       __func__, handshake->newstyle_magic, NBD_NEWSTYLE_MAGIC);
-		return false;
-	}
 	if (flags & ~VALID_NEWSTYLE_FLAGS)
 		syslog(LOG_ERR, "%s: ignoring unknown handshake flags: %#06x",
 		       __func__, flags);
@@ -387,9 +356,6 @@ nbd_newstyle_negotiation_dump(struct nbd_newstyle_negotiation *handshake)
 {
 	uint16_t flags = handshake->handshake_flags;
 
-	syslog(LOG_DEBUG, "\tmagic: %#018lx", handshake->magic);
-	syslog(LOG_DEBUG, "\tnewstyle_magic: %#018lx",
-	       handshake->newstyle_magic);
 	syslog(LOG_DEBUG, "\thandshake_flags: %#06x [%s%s%s]%s", flags,
 	       (flags & NBD_FLAG_FIXED_NEWSTYLE) ? "FIXED_NEWSTYLE" : "",
 	       ((flags & VALID_NEWSTYLE_FLAGS)
@@ -886,13 +852,8 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client)
 	return SUCCESS;
 }
 
-struct handshake_magic {
-	uint64_t magic;
-	uint64_t style;
-} __packed;
-
 static inline void
-handshake_magic_ntoh(struct handshake_magic *handshake)
+nbd_handshake_magic_ntoh(struct nbd_handshake_magic *handshake)
 {
 
 	handshake->magic = be64toh(handshake->magic);
@@ -900,7 +861,7 @@ handshake_magic_ntoh(struct handshake_magic *handshake)
 }
 
 static inline void
-handshake_magic_dump(struct handshake_magic *handshake)
+nbd_handshake_magic_dump(struct nbd_handshake_magic *handshake)
 {
 
 	syslog(LOG_DEBUG, "\tmagic: %#018lx (expected %#018lx)",
@@ -912,14 +873,14 @@ handshake_magic_dump(struct handshake_magic *handshake)
 int
 nbd_client_negotiate(struct nbd_client *client)
 {
-	struct handshake_magic handshake;
+	struct nbd_handshake_magic handshake;
 	ssize_t len;
 	int sock;
 
 	sock = client->sock;
 
 	while (true) {
-		len = recv(sock, &handshake, sizeof handshake, MSG_PEEK);
+		len = recv(sock, &handshake, sizeof handshake, MSG_WAITALL);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -932,7 +893,7 @@ nbd_client_negotiate(struct nbd_client *client)
 			break;
 	}
 
-	handshake_magic_ntoh(&handshake);
+	nbd_handshake_magic_ntoh(&handshake);
 
 	if (handshake.magic != NBD_MAGIC) {
 		syslog(LOG_ERR, "%s: handshake failed: invalid magic", __func__);
@@ -971,7 +932,7 @@ nbd_client_negotiate(struct nbd_client *client)
 	}
 
 	syslog(LOG_ERR, "%s: handshake failed: unknown style", __func__);
-	handshake_magic_dump(&handshake);
+	nbd_handshake_magic_dump(&handshake);
 
 	return FAILURE;
 }
