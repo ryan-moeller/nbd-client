@@ -548,10 +548,6 @@ main(int argc, char *argv[])
 
 	/*
 	 * Drop to a restricted set of capabilities.
-	 *
-	 * Capsicum isn't permitting the connect(2) to go through in
-	 * capability mode, so we're stuck entering after the connection is
-	 * established.
 	 */
 
 	if (enter_capability_mode() == FAILURE
