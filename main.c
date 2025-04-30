@@ -17,7 +17,6 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <math.h>
 #include <netdb.h>
 #include <signal.h>
 #include <stdbool.h>
