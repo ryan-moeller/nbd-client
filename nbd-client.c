@@ -32,6 +32,8 @@ struct nbd_client {
 	_Atomic(bool) disconnect;
 	uint32_t flags;
 	uint64_t size;
+	ssize_t (*send)(struct nbd_client *, void const *, size_t);
+	ssize_t (*recv)(struct nbd_client *, void *, size_t);
 };
 
 struct nbd_client *
@@ -54,6 +56,18 @@ nbd_client_free(struct nbd_client *client)
 {
 
 	free(client);
+}
+
+static ssize_t
+nbd_client_send(struct nbd_client *client, void const *buf, size_t len)
+{
+	return send(client->sock, buf, len, MSG_NOSIGNAL);
+}
+
+static ssize_t
+nbd_client_recv(struct nbd_client *client, void *buf, size_t len)
+{
+	return recv(client->sock, buf, len, MSG_WAITALL);
 }
 
 static int
@@ -89,7 +103,9 @@ nbd_client_init(struct nbd_client *client, struct addrinfo *ai)
 			return FAILURE;
 		}
 	}
-        client->sock = sock;
+	client->sock = sock;
+	client->send = nbd_client_send;
+	client->recv = nbd_client_recv;
 
 	return SUCCESS;
 }
@@ -281,12 +297,9 @@ nbd_client_oldstyle_handshake(struct nbd_client *client)
 {
 	struct nbd_oldstyle_negotiation handshake;
 	ssize_t len;
-	int sock;
-
-	sock = client->sock;
 
 	while (true) {
-		len = recv(sock, &handshake, sizeof handshake, MSG_WAITALL);
+		len = client->recv(client, &handshake, sizeof handshake);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -387,12 +400,9 @@ nbd_client_newstyle_handshake(struct nbd_client *client)
 	struct nbd_client_flags response;
 	uint32_t client_flags;
 	ssize_t len;
-	int sock;
-
-	sock = client->sock;
 
 	while (true) {
-		len = recv(sock, &handshake, sizeof handshake, MSG_WAITALL);
+		len = client->recv(client, &handshake, sizeof handshake);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -416,7 +426,7 @@ nbd_client_newstyle_handshake(struct nbd_client *client)
 
 	nbd_client_flags_set_client_flags(&response, client_flags);
 
-	len = send(sock, &response, sizeof response, MSG_NOSIGNAL);
+	len = client->send(client, &response, sizeof response);
 	if (len != sizeof response)
 		goto connection_fail;
 
@@ -457,11 +467,8 @@ nbd_client_send_option(struct nbd_client *client,
 		       size_t length, uint8_t *data)
 {
 	ssize_t len;
-	int sock;
 
-	sock = client->sock;
-
-	len = send(sock, option, sizeof *option, MSG_NOSIGNAL);
+	len = client->send(client, option, sizeof *option);
 	if (len != sizeof *option)
 		goto connection_fail;
 
@@ -470,7 +477,7 @@ nbd_client_send_option(struct nbd_client *client,
 
 	assert(data != NULL);
 
-	len = send(sock, data, length, MSG_NOSIGNAL);
+	len = client->send(client, data, length);
 	if (len != length)
 		goto connection_fail;
 
@@ -608,12 +615,9 @@ nbd_client_recv_option_reply(struct nbd_client *client,
 {
 	size_t recvlen;
 	ssize_t len;
-	int sock;
-
-	sock = client->sock;
 
 	while (true) {
-		len = recv(sock, reply, sizeof *reply, MSG_WAITALL);
+		len = client->recv(client, reply, sizeof *reply);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -642,7 +646,7 @@ nbd_client_recv_option_reply(struct nbd_client *client,
 	recvlen = MIN(reply->length, datalen);
 
 	while (true) {
-		len = recv(sock, data, recvlen, MSG_WAITALL);
+		len = client->recv(client, data, recvlen);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -677,12 +681,9 @@ nbd_client_recv_export_info(struct nbd_client *client,
 	static size_t const SHORT_INFO_LEN =
 		sizeof *info - sizeof info->reserved;
 	ssize_t len;
-	int sock;
-
-	sock = client->sock;
 
 	while (true) {
-		len = recv(sock, info, SHORT_INFO_LEN, MSG_WAITALL);
+		len = client->recv(client, info, SHORT_INFO_LEN);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -701,8 +702,8 @@ nbd_client_recv_export_info(struct nbd_client *client,
 		return SUCCESS;
 
 	while (true) {
-		len = recv(sock, info + SHORT_INFO_LEN,
-			   sizeof info->reserved, MSG_WAITALL);
+		len = client->recv(client, info + SHORT_INFO_LEN,
+				   sizeof info->reserved);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -831,7 +832,7 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client)
 
 		do {
 			recvlen = MIN(remaining, BUFLEN);
-			len = recv(client->sock, buf, recvlen, 0);
+			len = client->recv(client, buf, recvlen);
 			if (client->disconnect)
 				return FAILURE;
 			if (len == -1 && errno == EINTR)
@@ -875,12 +876,9 @@ nbd_client_negotiate(struct nbd_client *client)
 {
 	struct nbd_handshake_magic handshake;
 	ssize_t len;
-	int sock;
-
-	sock = client->sock;
 
 	while (true) {
-		len = recv(sock, &handshake, sizeof handshake, MSG_WAITALL);
+		len = client->recv(client, &handshake, sizeof handshake);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -1005,11 +1003,8 @@ nbd_client_send_request(struct nbd_client *client, uint16_t command,
 	struct nbd_request request;
 	size_t sendlen;
 	ssize_t len;
-	int sock;
 
 	assert(offset + length <= client->size);
-
-	sock = client->sock;
 
 	nbd_request_init(&request);
 	nbd_request_set_flags(&request, 0);
@@ -1018,7 +1013,7 @@ nbd_client_send_request(struct nbd_client *client, uint16_t command,
 	nbd_request_set_offset(&request, offset);
 	nbd_request_set_length(&request, length);
 
-	len = send(sock, &request, sizeof request, MSG_NOSIGNAL);
+	len = client->send(client, &request, sizeof request);
 	if (len != sizeof request) {
 		syslog(LOG_ERR, "%s: failed to send request header", __func__);
 		goto connection_fail;
@@ -1031,7 +1026,7 @@ nbd_client_send_request(struct nbd_client *client, uint16_t command,
 
 	sendlen = MIN(length, datalen);
 
-	len = send(sock, data, sendlen, MSG_NOSIGNAL);
+	len = client->send(client, data, sendlen);
 	if (len != sendlen) {
 		syslog(LOG_ERR, "%s: failed to send request data", __func__);
 		goto connection_fail;
@@ -1169,12 +1164,9 @@ nbd_client_recv_reply_header(struct nbd_client *client, uint64_t *handle)
 {
 	struct nbd_reply reply;
 	ssize_t len;
-	int sock;
-
-	sock = client->sock;
 
 	while (true) {
-		len = recv(sock, &reply, sizeof reply, MSG_WAITALL);
+		len = client->recv(client, &reply, sizeof reply);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
@@ -1220,7 +1212,6 @@ nbd_client_recv_reply_data(struct nbd_client *client, size_t length,
 {
 	size_t recvlen;
 	ssize_t len;
-	int sock;
 
 	if (length == 0)
 		return SUCCESS;
@@ -1228,12 +1219,10 @@ nbd_client_recv_reply_data(struct nbd_client *client, size_t length,
 	assert(buflen > 0);
 	assert(buf != NULL);
 
-	sock = client->sock;
-
 	recvlen = MIN(length, buflen);
 
 	while (true) {
-		len = recv(sock, buf, recvlen, MSG_WAITALL);
+		len = client->recv(client, buf, recvlen);
 		if (client->disconnect)
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
