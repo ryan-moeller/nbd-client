@@ -1,3 +1,8 @@
+## NOTICE
+
+See https://github.com/ryan-moeller/kernel-nbd-client for a new and improved
+NBD client for FreeBSD.
+
 ## Synopsis
 
 The Network Block Device is a Linux-originated lightweight block access
@@ -18,7 +23,7 @@ case it remains running in the foreground.
 
 ## Caveats
 
-* TLS and other extensions are not currently supported.
+* Most protocol extensions are not currently supported.
 * Only the default (unnamed) export is used.
 * Manual control (listing, naming, numbering, removal) of the device nodes
   is not yet provided by this tool.
@@ -35,6 +40,12 @@ Connect specifying a hostname and port number:
 
 ```
 nbd-client nbd.storage.internal-domain.net 10809
+```
+
+Connect using a UNIX-domain socket:
+
+```
+nbd-client /path/to/nbd-server.socket
 ```
 
 You can then use this device as a regular disk device.  For example, create
@@ -75,6 +86,7 @@ Note: This project expects to be compiled with BSD make, not GNU make.
 * configuration file
 * rc scripts
 * option to drop to a less privileged user?
+* parallel connections to an export
 
 ## Bugs
 
