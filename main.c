@@ -517,17 +517,12 @@ main(int argc, char *argv[])
 		goto cleanup;
 
 	/*
-	 * Initialize the ggate context and nbd socket.
+	 * Initialize the ggate context.
 	 */
 
 	ggate_context_init(ggate);
 	if (ggate_context_open(ggate) == FAILURE) {
 		syslog(LOG_ERR, "%s: cannot open ggate context", __func__);
-		goto close;
-	}
-
-	if (nbd_client_init(nbd) == FAILURE) {
-		syslog(LOG_ERR, "%s: cannot create socket", __func__);
 		goto close;
 	}
 
@@ -539,10 +534,11 @@ main(int argc, char *argv[])
 	hints.ai_flags = AI_CANONNAME;
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
 	if (casper_dns_lookup(host, port, &hints, &ai) == FAILURE)
 		goto close;
 
-	result = nbd_client_connect(nbd, ai);
+	result = nbd_client_connect(nbd, host, ai);
 	freeaddrinfo(ai);
 
 	if (result == FAILURE) {

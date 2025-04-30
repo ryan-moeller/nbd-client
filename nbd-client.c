@@ -57,10 +57,9 @@ nbd_client_free(struct nbd_client *client)
 	free(client);
 }
 
-int
-nbd_client_init(struct nbd_client *client)
+static int
+nbd_client_init(struct nbd_client *client, struct addrinfo *ai)
 {
-	struct timeval tv;
 	int sock;
 	int on;
 
@@ -68,47 +67,29 @@ nbd_client_init(struct nbd_client *client)
 
 	memset(client, 0, sizeof *client);
 
-	sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+	sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 	if (sock == FAILURE) {
 		syslog(LOG_ERR, "%s: failed to create socket: %m", __func__);
 		return FAILURE;
 	}
 
-	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on)
-	    == FAILURE) {
-		syslog(LOG_ERR,
-		       "%s: failed to set socket option TCP_NODELAY: %m",
-		       __func__);
-		return FAILURE;
-	}
+	if (ai->ai_family != AF_UNIX) {
+		if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on)
+		    == FAILURE) {
+			syslog(LOG_ERR,
+				"%s: failed to set socket option TCP_NODELAY: %m",
+			       __func__);
+			return FAILURE;
+		}
 
-	if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on)
-	    == FAILURE) {
-		syslog(LOG_ERR,
-		       "%s: failed to set socket option SO_KEEPALIVE: %m",
-		       __func__);
-		return FAILURE;
+		if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on)
+		    == FAILURE) {
+			syslog(LOG_ERR,
+			       "%s: failed to set socket option SO_KEEPALIVE: %m",
+			       __func__);
+			return FAILURE;
+		}
 	}
-	/*
-	tv.tv_sec = NBD_CLIENT_TIMEOUT;
-	tv.tv_usec = 0;
-
-	if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv)
-	    == FAILURE) {
-		syslog(LOG_ERR,
-		       "%s: failed to set socket option SO_SNDTIMEO: %m",
-		       __func__);
-		return FAILURE;
-	}
-
-	if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv)
-	    == FAILURE) {
-		syslog(LOG_ERR,
-		       "%s: failed to set socket option SO_RCVTIMEO: %m",
-		       __func__);
-		return FAILURE;
-	}
-	*/
         client->sock = sock;
 
 	return SUCCESS;
@@ -166,19 +147,28 @@ nbd_client_disable_trim(struct nbd_client *client)
 }
 
 int
-nbd_client_connect(struct nbd_client *client, struct addrinfo *ai)
+nbd_client_connect(struct nbd_client *client, char const *host,
+		   struct addrinfo *first_ai)
 {
+	struct addrinfo *ai;
 	int sock;
 
-	sock = client->sock;
-
-	if (connect(sock, ai->ai_addr, sizeof *ai->ai_addr) == FAILURE) {
+	for (ai = first_ai; ai != NULL; ai = ai->ai_next) {
+		if (nbd_client_init(client, ai) == FAILURE)
+			continue;
+		sock = client->sock;
+		if (connect(sock, ai->ai_addr, ai->ai_addrlen) == FAILURE) {
+			close(sock);
+			continue;
+		}
+		break;
+	}
+	if (ai == NULL) {
 		syslog(LOG_ERR,
 		       "%s: failed to connect to remote server (%s): %m",
-		       __func__, ai->ai_canonname);
+		       __func__, host);
 		return FAILURE;
 	}
-
 	return SUCCESS;
 }
 
