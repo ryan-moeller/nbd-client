@@ -15,6 +15,10 @@
 
 #include <machine/param.h>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include "openssl_hostname_validation.h"
+
 #include <assert.h>
 #include <errno.h>
 #include <netdb.h>
@@ -40,7 +44,9 @@ static void
 usage()
 {
 
-	fprintf(stderr, "usage: %s [-f] host [port]\n", getprogname());
+	fprintf(stderr,
+		"usage: %s [-f] [[-A cacert] -C cert -K key] host [port]\n",
+		getprogname());
 }
 
 static volatile sig_atomic_t disconnect = 0;
@@ -390,6 +396,24 @@ run_loop(ggate_context_t ggate, nbd_client_t nbd)
 	return SUCCESS;
 }
 
+/* See http://archives.seul.org/libevent/users/Jan-2013/msg00039.html */
+static int
+cert_verify_callback(X509_STORE_CTX *x509_ctx, void *arg)
+{
+	char const *host = arg;
+	X509 *server_cert;
+
+	if (X509_verify_cert(x509_ctx) != 1)
+		return 0;
+	server_cert = X509_STORE_CTX_get_current_cert(x509_ctx);
+	if (validate_hostname(host, server_cert) != MatchFound) {
+		syslog(LOG_ERR, "%s: failed to validate server hostname",
+		       __func__);
+		return 0;
+	}
+	return 1;
+}
+
 static int
 casper_dns_lookup(char const *host, char const *port, struct addrinfo *hints,
     struct addrinfo **res)
@@ -444,6 +468,7 @@ main(int argc, char *argv[])
 	ggate_context_t ggate;
 	nbd_client_t nbd;
 	char const *host, *port;
+	char const *cacertfile, *certfile, *keyfile;
 	char ident[128]; // arbitrary length limit
 	struct addrinfo hints, *ai;
 	uint64_t size;
@@ -451,6 +476,7 @@ main(int argc, char *argv[])
 	int result, retval;
 
 	retval = EXIT_FAILURE;
+	cacertfile = certfile = keyfile = NULL;
 	daemonize = true;
 	ggate = NULL;
 	nbd = NULL;
@@ -459,10 +485,19 @@ main(int argc, char *argv[])
 	 * Check the command line arguments.
 	 */
 
-	while ((result = getopt(argc, argv, "f")) != -1) {
+	while ((result = getopt(argc, argv, "fA:C:K:")) != -1) {
 		switch (result) {
 		case 'f':
 			daemonize = false;
+			break;
+		case 'A':
+			cacertfile = optarg;
+			break;
+		case 'C':
+			certfile = optarg;
+			break;
+		case 'K':
+			keyfile = optarg;
 			break;
 		case '?':
 		default:
@@ -474,6 +509,19 @@ main(int argc, char *argv[])
 	argv += optind;
 
 	if (argc < 1 || argc > 2) {
+		usage();
+		return EXIT_FAILURE;
+	}
+
+	if (cacertfile != NULL && certfile == NULL) {
+		usage();
+		return EXIT_FAILURE;
+	}
+	if (certfile != NULL && keyfile == NULL) {
+		usage();
+		return EXIT_FAILURE;
+	}
+	if (keyfile != NULL && certfile == NULL) {
 		usage();
 		return EXIT_FAILURE;
 	}
@@ -544,6 +592,63 @@ main(int argc, char *argv[])
 		syslog(LOG_ERR, "%s: failed to connect to server (%s:%s)",
 		       __func__, host, port);
 		goto close;
+	}
+
+	/*
+	 * Set up TLS if needed.
+	 */
+
+	if (certfile != NULL) {
+		SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+
+		if (ctx == NULL) {
+			ERR_print_errors_fp(stderr);
+			syslog(LOG_ERR, "%s: failed to create TLS client",
+			       __func__);
+			goto close;
+		}
+
+		if (cacertfile != NULL &&
+		    SSL_CTX_load_verify_file(ctx, cacertfile) != 1) {
+			ERR_print_errors_fp(stderr);
+			syslog(LOG_ERR, "%s: failed to load CA certificate %s",
+			       __func__, cacertfile);
+			SSL_CTX_free(ctx);
+			goto close;
+		}
+
+		if (SSL_CTX_use_certificate_chain_file(ctx, certfile) != 1) {
+			ERR_print_errors_fp(stderr);
+			syslog(LOG_ERR,
+			       "%s: failed to use certificate chain %s",
+			       __func__, certfile);
+			SSL_CTX_free(ctx);
+			goto close;
+		}
+
+		if (SSL_CTX_use_PrivateKey_file(ctx, keyfile, SSL_FILETYPE_PEM)
+		    != 1) {
+			ERR_print_errors_fp(stderr);
+			syslog(LOG_ERR, "%s: failed to use private key %s",
+			       __func__, keyfile);
+			SSL_CTX_free(ctx);
+			goto close;
+		}
+
+		if (SSL_CTX_check_private_key(ctx) != 1) {
+			ERR_print_errors_fp(stderr);
+			syslog(LOG_ERR, "%s: private key %s failed check",
+			       __func__, keyfile);
+			SSL_CTX_free(ctx);
+			goto close;
+		}
+
+		SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+		SSL_CTX_set_cert_verify_callback(ctx, cert_verify_callback,
+						 __DECONST(void *, host));
+		SSL_CTX_set_options(ctx, SSL_OP_ENABLE_KTLS);
+		SSL_CTX_set_min_proto_version(ctx, TLS1_VERSION);
+		nbd_client_set_ssl_ctx(nbd, ctx);
 	}
 
 	/*

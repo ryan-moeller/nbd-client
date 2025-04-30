@@ -18,6 +18,9 @@
 #include <syslog.h>
 #include <unistd.h>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 #include "check.h"
 #include "nbd-client.h"
 #include "nbd-protocol.h"
@@ -32,6 +35,9 @@ struct nbd_client {
 	_Atomic(bool) disconnect;
 	uint32_t flags;
 	uint64_t size;
+	char const *host;
+	SSL_CTX *ssl_ctx;
+	SSL *ssl;
 	ssize_t (*send)(struct nbd_client *, void const *, size_t);
 	ssize_t (*recv)(struct nbd_client *, void *, size_t);
 };
@@ -54,7 +60,9 @@ nbd_client_alloc()
 void
 nbd_client_free(struct nbd_client *client)
 {
-
+	SSL_free(client->ssl);
+	SSL_CTX_free(client->ssl_ctx);
+	free(__DECONST(char *, client->host));
 	free(client);
 }
 
@@ -71,7 +79,8 @@ nbd_client_recv(struct nbd_client *client, void *buf, size_t len)
 }
 
 static int
-nbd_client_init(struct nbd_client *client, struct addrinfo *ai)
+nbd_client_init(struct nbd_client *client, char const *host,
+		struct addrinfo *ai)
 {
 	int sock;
 	int on;
@@ -104,6 +113,9 @@ nbd_client_init(struct nbd_client *client, struct addrinfo *ai)
 		}
 	}
 	client->sock = sock;
+	if (ai->ai_canonname != NULL)
+		host = ai->ai_canonname;
+	client->host = strdup(host);
 	client->send = nbd_client_send;
 	client->recv = nbd_client_recv;
 
@@ -169,7 +181,7 @@ nbd_client_connect(struct nbd_client *client, char const *host,
 	int sock;
 
 	for (ai = first_ai; ai != NULL; ai = ai->ai_next) {
-		if (nbd_client_init(client, ai) == FAILURE)
+		if (nbd_client_init(client, host, ai) == FAILURE)
 			continue;
 		sock = client->sock;
 		if (connect(sock, ai->ai_addr, ai->ai_addrlen) == FAILURE) {
@@ -258,6 +270,12 @@ nbd_client_dump(struct nbd_client *client)
 	}
 	syslog(LOG_DEBUG, "\tflags: %#010x [%s]", flags, flag_string);
 	syslog(LOG_DEBUG, "\tsize: %lu", client->size);
+}
+
+void
+nbd_client_set_ssl_ctx(struct nbd_client *client, SSL_CTX *ssl_ctx)
+{
+	client->ssl_ctx = ssl_ctx;
 }
 
 static inline void
@@ -666,6 +684,96 @@ nbd_client_recv_option_reply(struct nbd_client *client,
 	return FAILURE;
 }
 
+static ssize_t
+nbd_client_send_tls(struct nbd_client *client, void const *buf, size_t len)
+{
+	size_t amount, resid = len;
+
+	do {
+		if (SSL_write_ex(client->ssl, buf, len, &amount) != 1)
+			return -1;
+		buf += amount;
+		resid -= amount;
+	} while (resid > 0);
+
+	return len;
+}
+
+static ssize_t
+nbd_client_recv_tls(struct nbd_client *client, void *buf, size_t len)
+{
+	size_t amount, resid = len;
+
+	do {
+		if (SSL_read_ex(client->ssl, buf, len, &amount) != 1)
+			return -1;
+		buf += amount;
+		resid -= amount;
+	} while (resid > 0);
+
+	return len;
+}
+
+static int
+nbd_client_starttls(struct nbd_client *client)
+{
+	struct nbd_option option;
+	struct nbd_option_reply reply;
+	SSL *ssl;
+
+	nbd_option_init(&option);
+
+	nbd_option_set_option(&option, NBD_OPTION_STARTTLS);
+	if (nbd_client_send_option(client, &option, 0, NULL)
+	    == FAILURE) {
+		syslog(LOG_ERR, "%s: sending STARTTLS option failed", __func__);
+		return FAILURE;
+	}
+	if (nbd_client_recv_option_reply(client, &option, &reply, 0, NULL)
+	    == FAILURE) {
+		syslog(LOG_ERR, "%s: receiving STARTTLS option reply failed",
+		       __func__);
+		return FAILURE;
+	}
+	if (reply.type != NBD_REPLY_ACK) {
+		syslog(LOG_ERR, "%s: server does not support TLS", __func__);
+		return FAILURE;
+	}
+
+	ssl = SSL_new(client->ssl_ctx);
+	if (ssl == NULL) {
+		ERR_print_errors_fp(stderr);
+		syslog(LOG_ERR, "%s: SSL_new failed", __func__);
+		return FAILURE;
+	}
+	if (SSL_set_tlsext_host_name(ssl, client->host) != 1) {
+		ERR_print_errors_fp(stderr);
+		SSL_free(ssl);
+		syslog(LOG_ERR, "%s: failed to set TLS server name", __func__);
+		return FAILURE;
+	}
+	if (SSL_set_fd(ssl, client->sock) != 1) {
+		ERR_print_errors_fp(stderr);
+		SSL_free(ssl);
+		syslog(LOG_ERR, "%s: failed to set TLS socket file descriptor",
+		       __func__);
+		return FAILURE;
+	}
+	if (SSL_connect(ssl) != 1) {
+		ERR_print_errors_fp(stderr);
+		SSL_free(ssl);
+		syslog(LOG_ERR, "%s: TLS handshake failed", __func__);
+		return FAILURE;
+	}
+	/* TODO: support multiple connections */
+	SSL_CTX_free(client->ssl_ctx);
+	client->ssl_ctx = NULL;
+	client->ssl = ssl;
+	client->send = nbd_client_send_tls;
+	client->recv = nbd_client_recv_tls;
+	return SUCCESS;
+}
+
 static inline void
 nbd_export_info_ntoh(struct nbd_export_info *info)
 {
@@ -902,6 +1010,12 @@ nbd_client_negotiate(struct nbd_client *client)
 
 		syslog(LOG_INFO, "%s: oldstyle handshake detected", __func__);
 
+		if (client->ssl_ctx != NULL) {
+			syslog(LOG_ERR, "%s: server does not support TLS",
+			       __func__);
+			return FAILURE;
+		}
+
 		if (nbd_client_oldstyle_handshake(client) == FAILURE) {
 			syslog(LOG_ERR, "%s: handshake failed", __func__);
 			return FAILURE;
@@ -915,6 +1029,12 @@ nbd_client_negotiate(struct nbd_client *client)
 
 		if (nbd_client_newstyle_handshake(client) == FAILURE) {
 			syslog(LOG_ERR, "%s: handshake failed", __func__);
+			return FAILURE;
+		}
+
+		if (client->ssl_ctx != NULL &&
+		    nbd_client_starttls(client) == FAILURE) {
+			syslog(LOG_ERR, "%s: STARTTLS failed", __func__);
 			return FAILURE;
 		}
 

@@ -3,6 +3,8 @@
 
 #include <sys/types.h>
 
+#include <openssl/ssl.h>
+
 struct addrinfo;
 
 typedef struct nbd_client *nbd_client_t;
@@ -24,6 +26,8 @@ void nbd_client_disable_trim(nbd_client_t client);
 int nbd_client_connect(nbd_client_t client, char const *host,
 		       struct addrinfo *ai);
 void nbd_client_shutdown(nbd_client_t client);
+
+void nbd_client_set_ssl_ctx(nbd_client_t client, SSL_CTX *ssl_ctx);
 
 int nbd_client_list(nbd_client_t client);
 
