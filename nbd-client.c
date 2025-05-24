@@ -246,6 +246,7 @@ nbd_client_dump(struct nbd_client *client)
 	syslog(LOG_DEBUG, "\tsock: %d", client->sock);
 	syslog(LOG_DEBUG, "\tdisconnect: %s",
 	       client->disconnect ? "true" : "false");
+	syslog(LOG_DEBUG, "\thost: %s", client->host);
 	flags = client->flags;
 	curflag = flag_string;
 	len = sizeof flag_string;
