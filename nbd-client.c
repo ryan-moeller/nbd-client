@@ -52,7 +52,7 @@ nbd_client_alloc()
 {
 	struct nbd_client *client;
 
-	client = (struct nbd_client *)malloc(sizeof (struct nbd_client));
+	client = calloc(1, sizeof *client);
 	if (client == NULL) {
 		assert(errno == ENOMEM);
 		syslog(LOG_ERR, "%s: failed to allocate nbd client: %m",
@@ -91,8 +91,6 @@ nbd_client_init(struct nbd_client *client, char const *host,
 	int on;
 
 	on = 1;
-
-	memset(client, 0, sizeof *client);
 
 	sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 	if (sock == FAILURE) {
