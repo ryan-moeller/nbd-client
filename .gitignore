@@ -1,5 +1,7 @@
 nbd-client
 *.o
+*.pico
+*.pieo
 *.debug
 *.full
 .depend*
