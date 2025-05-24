@@ -10,21 +10,6 @@
 #include <sys/endian.h>
 #include <sys/socket.h>
 #include <sys/syslimits.h>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-
-#include <libcasper.h>
-#include <casper/cap_dns.h>
-
-#include <geom/gate/g_gate.h>
-
-#include <machine/param.h>
-
-#include <openssl/err.h>
-#include <openssl/ssl.h>
-#include "openssl_hostname_validation.h"
-
 #include <assert.h>
 #include <errno.h>
 #include <netdb.h>
@@ -35,6 +20,18 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
+#include <libcasper.h>
+#include <casper/cap_dns.h>
+
+#include <geom/gate/g_gate.h>
+
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include "openssl_hostname_validation.h"
 
 #include "check.h"
 #include "ggate.h"

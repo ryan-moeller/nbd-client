@@ -4,13 +4,10 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <sys/types.h>
 #include <sys/capsicum.h>
 #include <sys/linker.h>
 #include <sys/module.h>
-#include <sys/types.h>
-
-#include <geom/gate/g_gate.h>
-
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -19,6 +16,8 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
+
+#include <geom/gate/g_gate.h>
 
 #include "check.h"
 #include "ggate.h"

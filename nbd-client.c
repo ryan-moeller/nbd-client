@@ -4,16 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <sys/types.h>
 #include <sys/capsicum.h>
 #include <sys/endian.h>
 #include <sys/socket.h>
 #include <sys/syslimits.h>
-#include <sys/types.h>
-
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-
 #include <assert.h>
 #include <errno.h>
 #include <netdb.h>
@@ -23,6 +18,10 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
+
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
 
 #include <openssl/err.h>
 #include <openssl/ssl.h>
