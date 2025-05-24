@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2016-2025 Ryan Moeller
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <sys/capsicum.h>
 #include <sys/endian.h>
 #include <sys/socket.h>
