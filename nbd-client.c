@@ -486,7 +486,7 @@ nbd_option_set_length(struct nbd_option *option, uint32_t length)
 static int
 nbd_client_send_option(struct nbd_client *client,
 		       struct nbd_option *option,
-		       size_t length, uint8_t *data)
+		       size_t length, uint8_t const *data)
 {
 	ssize_t len;
 
