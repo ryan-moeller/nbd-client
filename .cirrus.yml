@@ -1,0 +1,24 @@
+freebsd_instance:
+  cpu: 1
+  memory: 1G
+
+task:
+  matrix:
+    - name: releases/amd64/13.5-RELEASE
+      freebsd_instance:
+        image_family: freebsd-13-5
+    - name: releases/amd64/14.2-RELEASE
+      freebsd_instance:
+        image_family: freebsd-14-2
+    - name: snapshots/amd64/15.0-CURRENT
+      freebsd_instance:
+        image_family: freebsd-15-0-snap
+  stateful: false
+
+  build_script:
+    - make
+    - make install
+  # TODO: write manpage
+  #manlint_script:
+  #  - make manlint
+  # TODO: write tests
