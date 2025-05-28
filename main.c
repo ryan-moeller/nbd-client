@@ -38,6 +38,11 @@
 #include "nbd-client.h"
 #include "nbd-protocol.h"
 
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+#define SSL_CTX_load_verify_file(ctx, file) \
+    SSL_CTX_load_verify_locations((ctx), (file), NULL)
+#endif
+
 enum {
 	DEFAULT_SECTOR_SIZE = 512,
 	DEFAULT_GGATE_FLAGS = 0,
