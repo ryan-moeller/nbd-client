@@ -47,8 +47,9 @@ static void
 usage()
 {
 
-	fprintf(stderr,
-		"usage: %s [-f] [[-A cacert] -C cert -K key] host [port]\n",
+	fprintf(stderr, "usage: %s "
+		"[-f] [-n export] [[-A cacert] -C cert -K key] "
+		"host [port]\n",
 		getprogname());
 }
 
@@ -470,15 +471,16 @@ main(int argc, char *argv[])
 {
 	ggate_context_t ggate;
 	nbd_client_t nbd;
-	char const *host, *port;
+	char const *name, *host, *port;
 	char const *cacertfile, *certfile, *keyfile;
-	char ident[128]; // arbitrary length limit
+	char ident[G_GATE_INFOSIZE];
 	struct addrinfo hints, *ai;
 	uint64_t size;
 	bool daemonize;
 	int result, retval;
 
 	retval = EXIT_FAILURE;
+	name = "";
 	cacertfile = certfile = keyfile = NULL;
 	daemonize = true;
 	ggate = NULL;
@@ -488,10 +490,13 @@ main(int argc, char *argv[])
 	 * Check the command line arguments.
 	 */
 
-	while ((result = getopt(argc, argv, "fA:C:K:")) != -1) {
+	while ((result = getopt(argc, argv, "fn:A:C:K:")) != -1) {
 		switch (result) {
 		case 'f':
 			daemonize = false;
+			break;
+		case 'n':
+			name = optarg;
 			break;
 		case 'A':
 			cacertfile = optarg;
@@ -535,7 +540,10 @@ main(int argc, char *argv[])
 	else
 		port = NBD_DEFAULT_PORT;
 
-	snprintf(ident, sizeof ident, "%s (%s:%s)", getprogname(), host, port);
+	snprintf(ident, sizeof ident, "%s (%s%s%s%s%s)", getprogname(), host,
+		 strcmp(port, NBD_DEFAULT_PORT) == 0 ? "" : ":",
+		 strcmp(port, NBD_DEFAULT_PORT) == 0 ? "" : port,
+		 name[0] == '\0' ? "" : "/", name);
 
 	/*
 	 * Direct log messages to stderr if stderr is a TTY. Otherwise, log
@@ -667,7 +675,7 @@ main(int argc, char *argv[])
 	 * Negotiate options with the server.
 	 */
 
-	if (nbd_client_negotiate(nbd) == FAILURE) {
+	if (nbd_client_negotiate(nbd, name) == FAILURE) {
 		syslog(LOG_ERR, "%s: failed to negotiate options", __func__);
 		goto disconnect;
 	}
@@ -678,8 +686,8 @@ main(int argc, char *argv[])
 	 * Create the nbd device.
 	 */
 
-	if (ggate_context_create_device(ggate, host, port, "",
-					size, DEFAULT_SECTOR_SIZE,
+	if (ggate_context_create_device(ggate, ident, size,
+					DEFAULT_SECTOR_SIZE,
 					DEFAULT_GGATE_FLAGS) == FAILURE) {
 		syslog(LOG_ERR, "%s:failed to create ggate device", __func__);
 		goto destroy;

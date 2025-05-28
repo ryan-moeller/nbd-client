@@ -194,8 +194,7 @@ limit_create_ioctl(struct ggate_context *ctx)
 }
 
 int
-ggate_context_create_device(struct ggate_context *ctx, char const *host,
-			    char const *port, char const *path,
+ggate_context_create_device(struct ggate_context *ctx, char const *info,
 			    off_t mediasize, uint32_t sectorsize,
 			    uint32_t flags)
 {
@@ -214,8 +213,9 @@ ggate_context_create_device(struct ggate_context *ctx, char const *host,
 		.gctl_unit = unit,
 	};
 
-	snprintf(ggioc.gctl_info, sizeof ggioc.gctl_info,
-		 "%s:%s %s (nbd)", host, port, path);
+	if (strlcpy(ggioc.gctl_info, info, sizeof ggioc.gctl_info)
+	    >= sizeof ggioc.gctl_info)
+		return FAILURE;
 
 	if (ggate_context_ioctl(ctx, G_GATE_CMD_CREATE, &ggioc) == FAILURE) {
 		syslog(LOG_ERR, "%s: failed to create ggate device", __func__);

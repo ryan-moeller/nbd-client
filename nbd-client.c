@@ -726,7 +726,6 @@ nbd_client_starttls(struct nbd_client *client)
 	SSL *ssl;
 
 	nbd_option_init(&option);
-
 	nbd_option_set_option(&option, NBD_OPTION_STARTTLS);
 	if (nbd_client_send_option(client, &option, 0, NULL)
 	    == FAILURE) {
@@ -833,15 +832,19 @@ nbd_client_recv_export_info(struct nbd_client *client,
 }
 
 static int
-nbd_client_negotiate_options_fixed_newstyle(struct nbd_client *client)
+nbd_client_negotiate_options_fixed_newstyle(struct nbd_client *client,
+					    char const *name)
 {
 	struct nbd_option option;
 	struct nbd_export_info info;
+	size_t namelen;
 
+	namelen = strlen(name);
 	nbd_option_init(&option);
-
 	nbd_option_set_option(&option, NBD_OPTION_EXPORT_NAME);
-	if (nbd_client_send_option(client, &option, 0, NULL) == FAILURE) {
+	nbd_option_set_length(&option, namelen);
+	if (nbd_client_send_option(client, &option, namelen,
+				   (uint8_t const *)name) == FAILURE) {
 		syslog(LOG_ERR, "%s: sending option EXPORT_NAME failed",
 		       __func__);
 		return FAILURE;
@@ -984,7 +987,7 @@ nbd_handshake_magic_dump(struct nbd_handshake_magic *handshake)
 }
 
 int
-nbd_client_negotiate(struct nbd_client *client)
+nbd_client_negotiate(struct nbd_client *client, char const *name)
 {
 	struct nbd_handshake_magic handshake;
 	ssize_t len;
@@ -1014,6 +1017,12 @@ nbd_client_negotiate(struct nbd_client *client)
 
 		syslog(LOG_INFO, "%s: oldstyle handshake detected", __func__);
 
+		if (name[0] != '\0') {
+			syslog(LOG_ERR, "%s: server does not support named "
+			       "exports", __func__);
+			return FAILURE;
+		}
+
 		if (client->ssl_ctx != NULL) {
 			syslog(LOG_ERR, "%s: server does not support TLS",
 			       __func__);
@@ -1042,7 +1051,7 @@ nbd_client_negotiate(struct nbd_client *client)
 			return FAILURE;
 		}
 
-		if (nbd_client_negotiate_options_fixed_newstyle(client)
+		if (nbd_client_negotiate_options_fixed_newstyle(client, name)
 		    == FAILURE) {
 			syslog(LOG_ERR, "%s: option negotiation failed",
 			       __func__);

@@ -37,7 +37,7 @@ void nbd_client_set_ssl_ctx(nbd_client_t client, SSL_CTX *ssl_ctx);
 
 int nbd_client_list(nbd_client_t client);
 
-int nbd_client_negotiate(nbd_client_t client);
+int nbd_client_negotiate(nbd_client_t client, char const *name);
 int nbd_client_send_read(nbd_client_t client, uint64_t handle,
 			 off_t offset, size_t length);
 int nbd_client_send_write(nbd_client_t client, uint64_t handle,

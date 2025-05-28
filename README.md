@@ -24,7 +24,6 @@ case it remains running in the foreground.
 ## Caveats
 
 * Most protocol extensions are not currently supported.
-* Only the default (unnamed) export is used.
 * Manual control (listing, naming, numbering, removal) of the device nodes
   is not yet provided by this tool.
 
@@ -46,6 +45,11 @@ Connect using a UNIX-domain socket:
 
 ```
 nbd-client /path/to/nbd-server.socket
+```
+Connect to an export named `xyz`:
+
+```
+nbd-client -n xyz 10.2
 ```
 
 You can then use this device as a regular disk device.  For example, create
@@ -80,7 +84,6 @@ Note: This project expects to be compiled with BSD make, not GNU make.
 
 ## To Do
 
-* specify named export
 * list exports (work started)
 * connect to multiple/all exports on a server (spawn a thread per export?)
 * configuration file
