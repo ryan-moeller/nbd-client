@@ -1149,6 +1149,43 @@ nbd_client_list(struct nbd_client *client, nbd_client_list_cb cb, void *ctx)
 	return SUCCESS;
 }
 
+int
+nbd_client_abort(struct nbd_client *client)
+{
+	struct nbd_option option;
+	struct nbd_option_reply reply;
+
+	nbd_option_init(&option);
+	nbd_option_set_option(&option, NBD_OPTION_ABORT);
+	if (nbd_client_send_option(client, &option, 0, NULL) == FAILURE) {
+		syslog(LOG_ERR, "%s: sending option ABORT failed", __func__);
+		return FAILURE;
+	}
+	if (nbd_client_recv_option_reply(client, &option, &reply, 0, NULL)
+	    != 0) {
+		syslog(LOG_ERR, "%s: receiving option ABORT reply failed",
+		       __func__);
+		return FAILURE;
+	}
+	if (reply.type != NBD_REPLY_ACK) {
+		char const *msg;
+
+		msg = nbd_option_reply_type_string(&reply);
+		if (msg == NULL) {
+			syslog(LOG_ERR, "%s: unknown server error (%d)",
+			       __func__, reply.type);
+		} else {
+			syslog(LOG_ERR, "%s: server error: %s",
+			       __func__, msg);
+		}
+
+		nbd_option_reply_dump(&reply);
+
+		return FAILURE;
+	}
+	return SUCCESS;
+}
+
 static inline void
 nbd_request_init(struct nbd_request *request)
 {

@@ -707,8 +707,11 @@ main(int argc, char *argv[])
 
 	if (enter_capability_mode() == FAILURE
 	    || (!list && (ggate_context_rights_limit(ggate) == FAILURE))
-	    || nbd_client_rights_limit(nbd) == FAILURE)
-		goto disconnect;
+	    || nbd_client_rights_limit(nbd) == FAILURE) {
+		nbd_client_abort(nbd);
+		nbd_client_shutdown(nbd);
+		goto close;
+	}
 
 	if (list) {
 		/*
@@ -716,7 +719,9 @@ main(int argc, char *argv[])
 		 */
 
 		retval = nbd_client_list(nbd, list_callback, NULL);
-		goto disconnect;
+		nbd_client_abort(nbd);
+		nbd_client_shutdown(nbd);
+		goto close;
 	}
 
 	/*
@@ -725,7 +730,9 @@ main(int argc, char *argv[])
 
 	if (nbd_client_negotiate(nbd, name) == FAILURE) {
 		syslog(LOG_ERR, "%s: failed to negotiate options", __func__);
-		goto disconnect;
+		nbd_client_abort(nbd);
+		nbd_client_shutdown(nbd);
+		goto close;
 	}
 
 	size = nbd_client_get_size(nbd);

@@ -39,6 +39,7 @@ void nbd_client_set_ssl_ctx(nbd_client_t client, SSL_CTX *ssl_ctx);
 typedef int (*nbd_client_list_cb)(void *ctx, char *name, char *description);
 
 int nbd_client_list(nbd_client_t client, nbd_client_list_cb cb, void *ctx);
+int nbd_client_abort(nbd_client_t client);
 
 int nbd_client_negotiate(nbd_client_t client, char const *name);
 int nbd_client_send_read(nbd_client_t client, uint64_t handle,
