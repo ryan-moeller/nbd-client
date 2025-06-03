@@ -61,15 +61,16 @@ usage()
 static int
 list_callback(void *ctx __unused, char *name, char *description)
 {
-	if (name == NULL) {
-		assert(description == NULL);
-		printf("[default export]\n");
-	} else if (description == NULL) {
-		printf("%s\n", name);
+	if (name == NULL)
+		printf("[default export]");
+	else {
+		printf("%s", name);
 		free(name);
-	} else {
-		printf("%s\t%s\n", name, description);
-		free(name);
+	}
+	if (description == NULL)
+		printf("\n");
+	else {
+		printf("\t%s\n", description);
 		free(description);
 	}
 	/* TODO: verbosity control, more export info */
