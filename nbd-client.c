@@ -872,15 +872,19 @@ nbd_option_reply_server_ntoh(struct nbd_option_reply_server *server_export)
 	server_export->length = be32toh(server_export->length);
 }
 
+#ifndef NBD_REPLY_SERVER_LIMIT
+#define NBD_REPLY_SERVER_LIMIT  (4 * PAGE_SIZE) /* arbitrary safeguard */
+#endif
+
 static int
-nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client)
+nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client,
+					 nbd_client_list_cb cb, void *ctx)
 {
 	struct nbd_option option;
 	struct nbd_option_reply reply;
-	struct nbd_option_reply_server *server_export;
-	size_t const BUFLEN = NAME_MAX;
-	char *export_name, buf[BUFLEN + 1];
-	size_t recvlen, remaining;
+	struct nbd_option_reply_server server_export;
+	char *name, *description;
+	size_t resid;
 	ssize_t len;
 	int rc;
 
@@ -892,22 +896,23 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client)
 	}
 	while (true) {
 		rc = nbd_client_recv_option_reply(client, &option, &reply,
-						  BUFLEN, (uint8_t *)buf);
+						  sizeof(server_export),
+						  (uint8_t *)&server_export);
 		if (rc == FAILURE) {
 			syslog(LOG_ERR,
 			       "%s: receiving option LIST reply failed",
 			       __func__);
 			return FAILURE;
 		}
-		if (reply.type < 0) {
-			char const *msg =
-				nbd_option_reply_type_string(&reply);
+		if (reply.type == NBD_REPLY_ACK)
+			break;
+		if (reply.type != NBD_REPLY_SERVER) {
+			char const *msg;
 
+			msg = nbd_option_reply_type_string(&reply);
 			if (msg == NULL) {
 				syslog(LOG_ERR, "%s: unknown server error (%d)",
 				       __func__, reply.type);
-				syslog(LOG_DEBUG, "\tbe32toh: %d",
-				       be32toh(reply.type));
 			} else {
 				syslog(LOG_ERR, "%s: server error: %s",
 				       __func__, msg);
@@ -917,52 +922,73 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client)
 
 			return FAILURE;
 		}
+		/* Don't let the network do unbounded allocations. */
+		if (reply.length > NBD_REPLY_SERVER_LIMIT) {
+			syslog(LOG_ERR, "%s: server reply is too big",
+			       __func__);
 
-		if (reply.type == NBD_REPLY_ACK)
-			break;
+			nbd_option_reply_dump(&reply);
 
-		assert(reply.type == NBD_REPLY_SERVER);
-
-		server_export = (struct nbd_option_reply_server *)buf;
-		nbd_option_reply_server_ntoh(server_export);
-		if (server_export->length == 0) {
-			printf("\t[default export]\n");
-			continue;
+			return FAILURE;
 		}
 
-		recvlen = MIN(server_export->length, BUFLEN - 4);
-		export_name = buf + sizeof *server_export;
-		export_name[recvlen] = '\0';
-
-		printf("\t%s", export_name);
-
-		if (rc == SUCCESS) {
-			printf("\n");
-			continue;
-		}
-
-		remaining = server_export->length - BUFLEN;
-
-		assert(remaining > 0);
-
-		do {
-			recvlen = MIN(remaining, BUFLEN);
-			len = client->recv(client, buf, recvlen);
-			if (client->disconnect)
-				return FAILURE;
-			if (len == -1 && errno == EINTR)
-				continue;
-			if (len != recvlen) {
-				syslog(LOG_ERR, "%s: connection failed: %m",
-				       __func__);
-				return FAILURE;
+		nbd_option_reply_server_ntoh(&server_export);
+		assert((server_export.length + 4) <= reply.length);
+		if (server_export.length == 0)
+			name = NULL;
+		else {
+			resid = server_export.length;
+			name = malloc(resid + 1);
+			assert(name != NULL); /* hard to handle ENOMEM */
+			while (true) {
+				len = client->recv(client, name, resid);
+				if (client->disconnect) {
+					free(name);
+					return FAILURE;
+				}
+				if (len == -1 && errno == EINTR)
+					continue;
+				if (len != resid) {
+					free(name);
+					syslog(LOG_ERR,
+					       "%s: connection failed: %m",
+					       __func__);
+					return FAILURE;
+				}
+				break;
 			}
-			buf[recvlen] = '\0';
-			printf("%s", buf);
-			remaining -= recvlen;
-		} while (remaining > 0);
-
-		printf("\n");
+			name[resid] = '\0';
+		}
+		resid = reply.length - (4 + server_export.length);
+		if (resid == 0)
+			description = NULL;
+		else {
+			description = malloc(resid + 1);
+			assert(description != NULL); /* hard to handle ENOMEM */
+			while (true) {
+				len = client->recv(client, description, resid);
+				if (client->disconnect) {
+					free(description);
+					free(name);
+					return FAILURE;
+				}
+				if (len == -1 && errno == EINTR)
+					continue;
+				if (len != resid) {
+					free(description);
+					free(name);
+					syslog(LOG_ERR,
+					       "%s: connection failed: %m",
+					       __func__);
+					return FAILURE;
+				}
+				break;
+			}
+			description[resid] = '\0';
+		}
+		rc = cb(ctx, name, description);
+		if (rc != SUCCESS)
+			return rc;
 	}
 
 	return SUCCESS;
@@ -1069,15 +1095,55 @@ nbd_client_negotiate(struct nbd_client *client, char const *name)
 }
 
 int
-nbd_client_list(struct nbd_client *client)
+nbd_client_list(struct nbd_client *client, nbd_client_list_cb cb, void *ctx)
 {
+	struct nbd_handshake_magic handshake;
+	ssize_t len;
+
+	while (true) {
+		len = client->recv(client, &handshake, sizeof handshake);
+		if (client->disconnect)
+			return FAILURE;
+		if (len == -1 && errno == EINTR)
+			continue;
+		if (len == -1) {
+			syslog(LOG_ERR, "%s: connection failed: %m", __func__);
+			return FAILURE;
+		}
+		if (len == sizeof handshake)
+			break;
+	}
+
+	nbd_handshake_magic_ntoh(&handshake);
+
+	if (handshake.magic != NBD_MAGIC) {
+		syslog(LOG_ERR, "%s: handshake failed: invalid magic", __func__);
+		return FAILURE;
+	}
+
+	if (handshake.style == NBD_OLDSTYLE_MAGIC)
+		/* Fake it. */
+		return cb(ctx, NULL, NULL);
+
+	if (handshake.style != NBD_NEWSTYLE_MAGIC) {
+		syslog(LOG_ERR, "%s: handshake failed: unknown style", __func__);
+		nbd_handshake_magic_dump(&handshake);
+		return FAILURE;
+	}
 
 	if (nbd_client_newstyle_handshake(client) == FAILURE) {
 		syslog(LOG_ERR, "%s: handshake failed", __func__);
 		return FAILURE;
 	}
 
-	if (nbd_client_negotiate_list_fixed_newstyle(client) == FAILURE) {
+	if (client->ssl_ctx != NULL &&
+	    nbd_client_starttls(client) == FAILURE) {
+		syslog(LOG_ERR, "%s: STARTTLS failed", __func__);
+		return FAILURE;
+	}
+
+	if (nbd_client_negotiate_list_fixed_newstyle(client, cb, ctx)
+	    == FAILURE) {
 		syslog(LOG_ERR, "%s: server listing failed", __func__);
 		return FAILURE;
 	}

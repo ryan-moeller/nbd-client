@@ -53,9 +53,27 @@ usage()
 {
 
 	fprintf(stderr, "usage: %s "
-		"[-f] [-n export] [[-A cacert] -C cert -K key] "
+		"[-fl] [-n export] [[-A cacert] -C cert -K key] "
 		"host [port]\n",
 		getprogname());
+}
+
+static int
+list_callback(void *ctx __unused, char *name, char *description)
+{
+	if (name == NULL) {
+		assert(description == NULL);
+		printf("[default export]\n");
+	} else if (description == NULL) {
+		printf("%s\n", name);
+		free(name);
+	} else {
+		printf("%s\t%s\n", name, description);
+		free(name);
+		free(description);
+	}
+	/* TODO: verbosity control, more export info */
+	return SUCCESS;
 }
 
 static volatile sig_atomic_t disconnect = 0;
@@ -481,13 +499,14 @@ main(int argc, char *argv[])
 	char ident[G_GATE_INFOSIZE];
 	struct addrinfo hints, *ai;
 	uint64_t size;
-	bool daemonize;
+	bool daemonize, list;
 	int result, retval;
 
 	retval = EXIT_FAILURE;
 	name = "";
 	cacertfile = certfile = keyfile = NULL;
 	daemonize = true;
+	list = false;
 	ggate = NULL;
 	nbd = NULL;
 
@@ -495,10 +514,13 @@ main(int argc, char *argv[])
 	 * Check the command line arguments.
 	 */
 
-	while ((result = getopt(argc, argv, "fn:A:C:K:")) != -1) {
+	while ((result = getopt(argc, argv, "fln:A:C:K:")) != -1) {
 		switch (result) {
 		case 'f':
 			daemonize = false;
+			break;
+		case 'l':
+			list = true;
 			break;
 		case 'n':
 			name = optarg;
@@ -563,30 +585,41 @@ main(int argc, char *argv[])
 	else
 		openlog(ident, LOG_NDELAY | LOG_CONS | LOG_PID, LOG_DAEMON);
 
+	if (!list) {
+		/*
+		 * Ensure the geom_gate module is loaded.
+		 */
+
+		if (ggate_load_module() == FAILURE)
+			return EXIT_FAILURE;
+
+		/*
+		 * Allocate ggate context.
+		 */
+		ggate = ggate_context_alloc();
+		if (ggate == NULL)
+			goto cleanup;
+	}
+
 	/*
-	 * Ensure the geom_gate module is loaded.
+	 * Allocate nbd client.
 	 */
 
-	if (ggate_load_module() == FAILURE)
-		return EXIT_FAILURE;
-
-	/*
-	 * Allocate ggate context and nbd client.
-	 */
-
-	ggate = ggate_context_alloc();
 	nbd = nbd_client_alloc();
-	if (ggate == NULL || nbd == NULL)
+	if (nbd == NULL)
 		goto cleanup;
 
-	/*
-	 * Initialize the ggate context.
-	 */
+	if (!list) {
+		/*
+		 * Initialize the ggate context.
+		 */
 
-	ggate_context_init(ggate);
-	if (ggate_context_open(ggate) == FAILURE) {
-		syslog(LOG_ERR, "%s: cannot open ggate context", __func__);
-		goto close;
+		ggate_context_init(ggate);
+		if (ggate_context_open(ggate) == FAILURE) {
+			syslog(LOG_ERR, "%s: cannot open ggate context",
+			       __func__);
+			goto close;
+		}
 	}
 
 	/*
@@ -672,9 +705,18 @@ main(int argc, char *argv[])
 	 */
 
 	if (enter_capability_mode() == FAILURE
-	    || ggate_context_rights_limit(ggate) == FAILURE
+	    || (!list && (ggate_context_rights_limit(ggate) == FAILURE))
 	    || nbd_client_rights_limit(nbd) == FAILURE)
 		goto disconnect;
+
+	if (list) {
+		/*
+		 * List server exports.
+		 */
+
+		retval = nbd_client_list(nbd, list_callback, NULL);
+		goto disconnect;
+	}
 
 	/*
 	 * Negotiate options with the server.
@@ -726,6 +768,7 @@ main(int argc, char *argv[])
 
 	/* Destroy the ggate device. */
  destroy:
+	assert(!list);
 	ggate_context_cancel(ggate, 0);
 	ggate_context_destroy_device(ggate, true);
 
@@ -738,12 +781,14 @@ main(int argc, char *argv[])
 	/* Close open files. */
  close:
 	nbd_client_close(nbd);
-	ggate_context_close(ggate);
+	if (!list)
+		ggate_context_close(ggate);
 
 	/* Free data structures. */
  cleanup:
 	nbd_client_free(nbd);
-	ggate_context_free(ggate);
+	if (!list)
+		ggate_context_free(ggate);
 
 	if (retval != SUCCESS)
 		syslog(LOG_CRIT, "%s: device connection failed", __func__);

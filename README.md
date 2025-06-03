@@ -50,6 +50,12 @@ Connect using a UNIX-domain socket:
 ```
 nbd-client /path/to/nbd-server.socket
 ```
+List exports of a server:
+
+```
+nbd-client -l 10.2
+```
+
 Connect to an export named `xyz`:
 
 ```
@@ -88,7 +94,6 @@ Note: This project expects to be compiled with BSD make, not GNU make.
 
 ## To Do
 
-* list exports (work started)
 * connect to multiple/all exports on a server (spawn a thread per export?)
 * configuration file
 * rc scripts
