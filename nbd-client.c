@@ -583,7 +583,6 @@ nbd_option_reply_type_string(struct nbd_option_reply *reply)
 #define CASE_MESSAGE(c) case c: return #c
 #define EXTENSION " [unsupported extension]"
 #define UNUSED    " [unused]"
-#define TODO      " [todo]"
 
 		CASE_MESSAGE(NBD_REPLY_ACK);
 		CASE_MESSAGE(NBD_REPLY_SERVER);
@@ -592,12 +591,11 @@ nbd_option_reply_type_string(struct nbd_option_reply *reply)
 		CASE_MESSAGE(NBD_REPLY_ERROR_POLICY);
 		CASE_MESSAGE(NBD_REPLY_ERROR_INVALID);
 		CASE_MESSAGE(NBD_REPLY_ERROR_PLATFORM) UNUSED;
-		CASE_MESSAGE(NBD_REPLY_ERROR_TLS_REQUIRED) TODO;
+		CASE_MESSAGE(NBD_REPLY_ERROR_TLS_REQUIRED);
 		CASE_MESSAGE(NBD_REPLY_ERROR_UNKNOWN) EXTENSION;
 		CASE_MESSAGE(NBD_REPLY_ERROR_SHUTDOWN);
 		CASE_MESSAGE(NBD_REPLY_ERROR_BLOCK_SIZE_REQD) EXTENSION;
 
-#undef TODO
 #undef UNUSED
 #undef EXTENSION
 #undef CASE_MESSAGE
