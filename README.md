@@ -18,8 +18,9 @@ This client is designed to run on top of FreeBSD's GEOM Gate device driver,
 keeping the network client in a userland daemon rather than in a kernel
 module.
 
-Casper is used to sandbox the DNS lookup of the server host, and Capsicum
-is used to limit the capabilities of the client once connected.
+Casper is used to sandbox the DNS lookup of the server host and the socket
+connection to the server, and Capsicum is used to limit the capabilities of the
+ggate ctl descriptor and the client socket once connected.
 
 Messages are logged via syslog, and to stdout and stderr when running
 interactively.

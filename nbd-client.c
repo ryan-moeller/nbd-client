@@ -19,6 +19,9 @@
 #include <syslog.h>
 #include <unistd.h>
 
+#include <libcasper.h>
+#include <casper/cap_net.h>
+
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -177,8 +180,8 @@ nbd_client_disable_trim(struct nbd_client *client)
 }
 
 int
-nbd_client_connect(struct nbd_client *client, char const *host,
-		   struct addrinfo *first_ai)
+nbd_client_connect(struct nbd_client *client, cap_channel_t *capnet,
+		   char const *host, struct addrinfo *first_ai)
 {
 	struct addrinfo *ai;
 	int sock;
@@ -187,7 +190,8 @@ nbd_client_connect(struct nbd_client *client, char const *host,
 		if (nbd_client_init(client, host, ai) == FAILURE)
 			continue;
 		sock = client->sock;
-		if (connect(sock, ai->ai_addr, ai->ai_addrlen) == FAILURE) {
+		if (cap_connect(capnet, sock, ai->ai_addr, ai->ai_addrlen)
+		    == FAILURE) {
 			close(sock);
 			continue;
 		}

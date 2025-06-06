@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/syslimits.h>
 #include <assert.h>
+#include <capsicum_helpers.h>
 #include <errno.h>
 #include <netdb.h>
 #include <signal.h>
@@ -25,7 +26,7 @@
 #include <netinet/in.h>
 
 #include <libcasper.h>
-#include <casper/cap_dns.h>
+#include <casper/cap_net.h>
 
 #include <geom/gate/g_gate.h>
 
@@ -442,62 +443,59 @@ cert_verify_callback(X509_STORE_CTX *x509_ctx, void *arg)
 	return 1;
 }
 
-static int
-casper_dns_lookup(char const *host, char const *port, struct addrinfo *hints,
-    struct addrinfo **res)
+static cap_channel_t *
+casper_enter_net(char const *host, char const *port)
 {
-	cap_channel_t *casper, *casper_dns;
-	int result;
-
-	casper = cap_init();
-	if (casper == NULL) {
-		syslog(LOG_ERR, "%s: failed to initialize Casper: %m",
-		       __func__);
-		return FAILURE;
-	}
-
-	casper_dns = cap_service_open(casper, "system.dns");
-	cap_close(casper);
-	if (casper_dns == NULL) {
-		syslog(LOG_ERR, "%s: failed to open system.dns service: %m",
-		       __func__);
-		return FAILURE;
-	}
-
-	result = cap_getaddrinfo(casper_dns, host, port, hints, res);
-	cap_close(casper_dns);
-	if (result != SUCCESS) {
-		syslog(LOG_ERR, "%s: failed to lookup address (%s:%s): %s",
-		       __func__, host, port, gai_strerror(result));
-		return FAILURE;
-	}
-
-	return SUCCESS;
-}
-
-static int
-enter_capability_mode()
-{
-	cap_rights_t rights;
+	cap_channel_t *capcas, *capnet;
+	cap_net_limit_t *limit;
 
 	fclose(stdin);
-
-	if (cap_enter() == FAILURE) {
-		syslog(LOG_ERR, "%s: cannot enter capability mode", __func__);
-		return FAILURE;
+	capcas = cap_init();
+	if (capcas == NULL) {
+		syslog(LOG_ERR, "%s: failed to initialize Casper",
+		       __func__);
+		return NULL;
+	}
+	caph_cache_catpages();
+	if (caph_enter_casper() < 0) {
+		syslog(LOG_ERR, "%s: failed to enter capability mode",
+		       __func__);
+		cap_close(capcas);
+		return NULL;
+	}
+	capnet = cap_service_open(capcas, "system.net");
+	cap_close(capcas);
+	if (capnet == NULL) {
+		syslog(LOG_ERR, "%s: failed to open system.net service",
+		       __func__);
+		return NULL;
+	}
+	limit = cap_net_limit_init(capnet,
+				   CAPNET_NAME2ADDR | CAPNET_CONNECTDNS);
+	if (limit == NULL) {
+		syslog(LOG_ERR, "%s: failed to create limits", __func__);
+		cap_close(capnet);
+		return NULL;
+	}
+	cap_net_limit_name2addr(limit, host, port);
+	if (cap_net_limit(limit) < 0) {
+		syslog(LOG_ERR, "%s: failed to apply limits", __func__);
+		cap_close(capnet);
+		return NULL;
 	}
 
-	return SUCCESS;
+	return capnet;
 }
 
 int
 main(int argc, char *argv[])
 {
+	char ident[G_GATE_INFOSIZE];
 	ggate_context_t ggate;
 	nbd_client_t nbd;
 	char const *name, *host, *port;
 	char const *cacertfile, *certfile, *keyfile;
-	char ident[G_GATE_INFOSIZE];
+	cap_channel_t *capnet;
 	struct addrinfo hints, *ai;
 	uint64_t size;
 	bool daemonize, list;
@@ -588,6 +586,18 @@ main(int argc, char *argv[])
 
 	if (!list) {
 		/*
+		 * Try to daemonize unless instructed to stay in the foreground.
+		 */
+
+		if (daemonize) {
+			if (daemon(0, 0) == FAILURE) {
+				syslog(LOG_ERR, "%s: failed to daemonize: %m",
+				       __func__);
+				goto close;
+			}
+		}
+
+		/*
 		 * Ensure the geom_gate module is loaded.
 		 */
 
@@ -609,40 +619,6 @@ main(int argc, char *argv[])
 	nbd = nbd_client_alloc();
 	if (nbd == NULL)
 		goto cleanup;
-
-	if (!list) {
-		/*
-		 * Initialize the ggate context.
-		 */
-
-		ggate_context_init(ggate);
-		if (ggate_context_open(ggate) == FAILURE) {
-			syslog(LOG_ERR, "%s: cannot open ggate context",
-			       __func__);
-			goto close;
-		}
-	}
-
-	/*
-	 * Connect to the nbd server.
-	 */
-
-	memset(&hints, 0, sizeof hints);
-	hints.ai_flags = AI_CANONNAME;
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-	if (casper_dns_lookup(host, port, &hints, &ai) == FAILURE)
-		goto close;
-
-	result = nbd_client_connect(nbd, host, ai);
-	freeaddrinfo(ai);
-
-	if (result == FAILURE) {
-		syslog(LOG_ERR, "%s: failed to connect to server (%s:%s)",
-		       __func__, host, port);
-		goto close;
-	}
 
 	/*
 	 * Set up TLS if needed.
@@ -701,13 +677,57 @@ main(int argc, char *argv[])
 		nbd_client_set_ssl_ctx(nbd, ctx);
 	}
 
+	if (!list) {
+		/*
+		 * Initialize the ggate context.
+		 */
+
+		ggate_context_init(ggate);
+		if (ggate_context_open(ggate) == FAILURE) {
+			syslog(LOG_ERR, "%s: cannot open ggate context",
+			       __func__);
+			goto close;
+		}
+	}
+
 	/*
-	 * Drop to a restricted set of capabilities.
+	 * Set up Casper, enter capability mode, and get a handle to the
+	 * system.net service limited to the given host/port.  Limit the rights
+	 * on the ggate ctl descriptor now if needed.  The nbd socket rights are
+	 * limited after the connection is established, as we don't have the
+	 * socket at this time.
 	 */
 
-	if (enter_capability_mode() == FAILURE
-	    || (!list && (ggate_context_rights_limit(ggate) == FAILURE))
-	    || nbd_client_rights_limit(nbd) == FAILURE) {
+	capnet = casper_enter_net(host, port);
+	if (capnet == NULL ||
+	    (!list && ggate_context_rights_limit(ggate) == FAILURE))
+		goto close;
+
+	/*
+	 * Connect to the nbd server.
+	 */
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_flags = AI_CANONNAME;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+	result = cap_getaddrinfo(capnet, host, port, &hints, &ai);
+	if (result != SUCCESS) {
+		syslog(LOG_ERR, "%s: failed to lookup addres (%s:%s): %s",
+		       __func__, host, port, gai_strerror(result));
+		cap_close(capnet);
+		goto close;
+	}
+	result = nbd_client_connect(nbd, capnet, host, ai);
+	freeaddrinfo(ai);
+	cap_close(capnet);
+	if (result == FAILURE) {
+		syslog(LOG_ERR, "%s: failed to connect to server (%s:%s)",
+		       __func__, host, port);
+		goto close;
+	}
+	if (nbd_client_rights_limit(nbd) == FAILURE) {
 		nbd_client_abort(nbd);
 		nbd_client_shutdown(nbd);
 		goto close;
@@ -746,19 +766,6 @@ main(int argc, char *argv[])
 					DEFAULT_GGATE_FLAGS) == FAILURE) {
 		syslog(LOG_ERR, "%s:failed to create ggate device", __func__);
 		goto destroy;
-	}
-
-	/*
-	 * Try to daemonize now that the connection has been established,
-	 * unless instructed to stay in the foreground.
-	 */
-
-	if (daemonize) {
-		if (daemon(0, 0) == FAILURE) {
-			syslog(LOG_ERR, "%s: failed to daemonize: %m",
-			       __func__);
-			goto close;
-		}
 	}
 
 	/*

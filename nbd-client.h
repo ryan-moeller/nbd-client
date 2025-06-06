@@ -9,6 +9,8 @@
 
 #include <sys/types.h>
 
+#include <libcasper.h>
+
 #include <openssl/ssl.h>
 
 struct addrinfo;
@@ -29,8 +31,8 @@ void nbd_client_set_disconnect(nbd_client_t client, bool disconnect);
 
 void nbd_client_disable_trim(nbd_client_t client);
 
-int nbd_client_connect(nbd_client_t client, char const *host,
-		       struct addrinfo *ai);
+int nbd_client_connect(nbd_client_t client, cap_channel_t *capnet,
+		       char const *host, struct addrinfo *ai);
 void nbd_client_shutdown(nbd_client_t client);
 
 void nbd_client_set_ssl_ctx(nbd_client_t client, SSL_CTX *ssl_ctx);
