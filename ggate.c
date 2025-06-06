@@ -227,13 +227,8 @@ ggate_context_create_device(struct ggate_context *ctx, char const *info,
 		return FAILURE;
 
 	if (unit == G_GATE_UNIT_AUTO) {
-		if (isatty(fileno(stdout))) {
-			printf("%s%u\n", G_GATE_PROVIDER_NAME, ggioc.gctl_unit);
-			fflush(stdout);
-		} else {
-			syslog(LOG_INFO, "%s: %s%u", __func__,
-			       G_GATE_PROVIDER_NAME, ggioc.gctl_unit);
-		}
+		printf("%s%u\n", G_GATE_PROVIDER_NAME, ggioc.gctl_unit);
+		fflush(stdout);
 	}
 
 	ctx->unit = ggioc.gctl_unit;
