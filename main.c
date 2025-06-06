@@ -768,6 +768,16 @@ main(int argc, char *argv[])
 		goto destroy;
 	}
 
+	if (daemonize) {
+		/*
+		 * Now that we've printed the device name we can close
+		 * stdout/stderr to complete the daemonization.
+		 */
+
+		fclose(stdout);
+		fclose(stderr);
+	}
+
 	/*
 	 * Handle operations on the ggate device.
 	 */
