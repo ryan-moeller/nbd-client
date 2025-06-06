@@ -14,11 +14,103 @@ task:
       freebsd_instance:
         image_family: freebsd-15-0-snap
   stateful: false
-
+  env:
+    WD: /tmp/wd
+    PATH: /usr/local/sbin:${PATH}
+  setup_secript:
+    - mkdir ${WD}
   build_script:
     - make
     - make install
   # TODO: write manpage
   #manlint_script:
   #  - make manlint
-  # TODO: write tests
+  messages_background_script:
+    - tail -F -n +1 /var/log/messages
+  ca_info_file:
+    path: ${WD}/ca.info
+    from_contents: |
+      cn = testing nbd client
+      ca
+      cert_signing_key
+  server_info_file:
+    path: ${WD}/server.info
+    from_contents: |
+      organization = testing nbd client
+      cn = localhost
+      tls_www_server
+      encryption_key
+      signing_key
+  client_info_file:
+    path: ${WD}/client.info
+    from_contents: |
+      country = US
+      state = Florida
+      locality = Orlando
+      organization = testing nbd client
+      cn = localhost
+      tls_www_client
+      encryption_key
+      signing_key
+  test_setup_script:
+    - pkg install -y
+      gnutls
+      nbdkit
+    # Certificate Authority
+    - certtool --generate-privkey > ${WD}/ca-key.pem
+    - certtool --generate-self-signed
+      --load-privkey ${WD}/ca-key.pem
+      --template ${WD}/ca.info
+      --outfile ${WD}/ca-cert.pem
+    # Server
+    - certtool --generate-privkey > ${WD}/server-key.pem
+    - certtool --generate-certificate
+      --load-ca-certificate ${WD}/ca-cert.pem
+      --load-ca-privkey ${WD}/ca-key.pem
+      --load-privkey ${WD}/server-key.pem
+      --template ${WD}/server.info
+      --outfile ${WD}/server-cert.pem
+    # Client
+    - certtool --generate-privkey > ${WD}/client-key.pem
+    - certtool --generate-certificate
+      --load-ca-certificate ${WD}/ca-cert.pem
+      --load-ca-privkey ${WD}/ca-key.pem
+      --load-privkey ${WD}/client-key.pem
+      --template ${WD}/client.info
+      --outfile ${WD}/client-cert.pem
+  test_server_background_script:
+    - nbdkit
+      --no-fork
+      --threads ${CIRRUS_CPU}
+      --tls-certificates ${WD}
+      memory 128M
+  test_list_notls_script:
+    - nbd-client -l localhost
+  test_connect_notls_script:
+    - nbd-client localhost
+      | xargs -I @ echo GGATE=@ | tee -a ${CIRRUS_ENV}
+  test_notls_script:
+    - ggatec list
+    - diskinfo -twic ${GGATE}
+    - ggatec destroy -u ${GGATE##ggate}
+    # Unset the GGATE variable in the env.
+    - sed -i '' -e '/^GGATE=/d' ${CIRRUS_ENV}
+  test_list_tls_script:
+    - nbd-client -l
+      -A ${WD}/ca-cert.pem
+      -C ${WD}/client-cert.pem
+      -K ${WD}/client-key.pem
+      localhost
+  test_connect_tls_script:
+    - nbd-client
+      -A ${WD}/ca-cert.pem
+      -C ${WD}/client-cert.pem
+      -K ${WD}/client-key.pem
+      localhost
+      | xargs -I @ echo GGATE=@ | tee -a ${CIRRUS_ENV}
+  test_tls_script:
+    - ggatec list
+    - diskinfo -twic ${GGATE}
+    - ggatec destroy -u ${GGATE##ggate}
+    # Unset the GGATE variable in the env.
+    - set -i '' -e '/^GGATE=/d' ${CIRRUS_ENV}
