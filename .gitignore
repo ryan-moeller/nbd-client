@@ -5,3 +5,4 @@ nbd-client
 *.debug
 *.full
 .depend*
+*.gz

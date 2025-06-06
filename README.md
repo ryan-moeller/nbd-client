@@ -22,6 +22,8 @@ Casper is used to sandbox the DNS lookup of the server host and the socket
 connection to the server, and Capsicum is used to limit the capabilities of the
 ggate ctl descriptor and the client socket once connected.
 
+OpenSSL is used for TLS connections.
+
 Messages are logged via syslog, and to stdout and stderr when running
 interactively.
 
@@ -33,6 +35,7 @@ case it remains running in the foreground.
 * Most protocol extensions are not currently supported.
 * Manual control (listing, naming, numbering, removal) of the device nodes
   is not yet provided by this tool.
+* The client is currently single-threaded.
 
 ## Usage Example
 

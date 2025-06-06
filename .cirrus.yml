@@ -22,9 +22,8 @@ task:
   build_script:
     - make
     - make install
-  # TODO: write manpage
-  #manlint_script:
-  #  - make manlint
+  manlint_script:
+    - make manlint
   messages_background_script:
     - tail -F -n +1 /var/log/messages
   ca_info_file:

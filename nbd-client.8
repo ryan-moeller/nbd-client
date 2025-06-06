@@ -1,0 +1,167 @@
+.\" Copyright (c) 2025 Ryan Moeller
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.Dd June 6, 2025
+.Dt NBD-CLIENT 8
+.Os
+.Sh NAME
+.Nm nbd-client
+.Nd "userland Network Block Device client for GEOM Gate class"
+.Sh SYNOPSIS
+.Nm
+.Op Fl f
+.Op Fl n Ar export
+.Ar host
+.Op Ar port
+.Nm
+.Op Fl f
+.Op Fl n Ar export
+.Op Fl A Ar cacert
+.Fl C Ar cert
+.Fl K Ar key
+.Ar host
+.Op Ar port
+.Nm
+.Fl l
+.Ar host
+.Op Ar port
+.Nm
+.Fl l
+.Op Fl A Ar cacert
+.Fl C Ar cert
+.Fl K Ar key
+.Ar host
+.Op Ar port
+.Sh DESCRIPTION
+The Network Block Device (NBD) is a Linux-originated lightweight block access
+protocol that allows one to export a block device to a client.
+.Pp
+This client is designed to run on top of the GEOM Gate device driver, keeping
+the network client in a userland daemon rather than in a kernel module.
+.Pp
+.Xr libcasper 3
+is used to sandbox the DNS lookup of the server host and the socket connection
+to the server, and
+.Xr capsicum 4
+is used to limit the capabilities of the GEOM Gate control descriptor and the
+client socket once connected.
+.Pp
+OpenSSL is used for TLS connections.
+.Pp
+Messages are logged via
+.Xr syslog 3 ,
+and to stdout and stderr when running in the foreground.
+.Pp
+The client immediately daemonizes unless passed the
+.Fl f
+flag, in which case it remains running in the foreground.
+.Pp
+Caveats:
+.Pp
+.Bl -bullet -offset indent -compact
+.It
+Most protocol extensions are not currently supported.
+.It
+Manual control (listing, naming, numbering, removal) of the device nodes is not
+yet provided by this tool.
+.It
+The client is currently single-threaded.
+.El
+.Pp
+Available options:
+.Bl -tag -width Fl
+.It Fl f
+Stay running in the foreground.
+The default is to daemonize after printing the created device name.
+.It Fl l
+List exports of the server and exit.
+Each line of output starts with the export name, and if the server provides a
+description for the export it is printed following a tab character delimiting it
+from the name.
+If available, a default export is printed as
+.Ql [default export]
+rather than an empty string.
+.It Fl n Ar export
+Connect to the named export.
+The default export is requested if not specified.
+.It Fl A Ar cacert
+Optional path to a PEM-formatted CA certificate against which TLS certificates
+are verified.
+The system root CAs are used if not specified.
+.It Fl C Ar cert
+Make a TLS connection using the PEM-formatted client certificate at the given
+path.
+.It Fl K Ar key
+Make a TLS connection using the PEM-formatted client key at the given path.
+.El
+.Pp
+To make TLS connections, both a certificate and key must be given.
+.Pp
+The path of a UNIX-domain socket may be specified in place of a host.
+UNIX-domain sockets are not expected to perform well or be useful with TLS.
+.Sh TLS
+All TLS certificates and keys must be in PEM format.
+TLS certificates may be a certificate chain to include intermediary certificates
+in the chain of trust.
+.Sh EXIT STATUS
+Exit status is 0 on success, and 1 if the command fails.
+.Sh EXAMPLES
+Connect to an NBD server and print the name of the new device on stdout:
+.Bd -literal -offset indent
+# nbd-client nbdserver
+ggate0
+.Ed
+.Pp
+Connect specifying a hostname and port number:
+.Bd -literal -offset indent
+# nbd-client nbdserver 1234
+ggate1
+.Ed
+.Pp
+Connect using a UNIX-domain socket:
+.Bd -literal -offset indent
+# nbd-client /var/run/nbdserver.socket
+ggate2
+.Ed
+.Pp
+List exports of a server:
+.Bd -literal -offset indent
+# nbd-client -l nbdserver1
+myexport
+.Ed
+.Pp
+Connect to an export named
+.Ql myexport :
+.Bd -literal -offset indent
+# nbd-client -n myexport nbdserver1
+ggate3
+.Ed
+.Pp
+Use the
+.Xr ggatec 8
+utility to list all attached GEOM Gate devices.
+These may not all be NBD devices:
+.Bd -literal -offset indent
+# ggatec list
+ggate0
+ggate1
+ggate2
+ggate3
+.Ed
+.Pp
+Use the
+.Xr ggatec 8
+utility to force removal of the GEOM Gate device unit
+.Ql 0 ,
+which corresponds to the device named
+.Ql ggate0 .
+.Bd -literal -offset indent
+# ggatec destroy -f -u 0
+.Ed
+.Sh SEE ALSO
+.Xr geom 4 ,
+.Xr ggatec 8 ,
+.Xr ggated 8 ,
+.Xr ggatel 8
+.Sh AUTHORS
+.An Ryan Moeller
