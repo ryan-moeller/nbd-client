@@ -590,7 +590,7 @@ main(int argc, char *argv[])
 		 */
 
 		if (daemonize) {
-			if (daemon(0, 0) == FAILURE) {
+			if (daemon(1, 1) == FAILURE) {
 				syslog(LOG_ERR, "%s: failed to daemonize: %m",
 				       __func__);
 				goto close;
