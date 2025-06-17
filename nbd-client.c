@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/capsicum.h>
 #include <sys/endian.h>
 #include <sys/socket.h>
@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <netdb.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,9 +23,9 @@
 #include <libcasper.h>
 #include <casper/cap_net.h>
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <arpa/inet.h>
 
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -33,21 +34,31 @@
 #include "nbd-client.h"
 #include "nbd-protocol.h"
 
-enum {
-	NBD_CLIENT_TIMEOUT = 8,
-	NBD_REPLY_QUEUE_TIMEOUT = 1,
-};
+#define NBD_CLIENT_TIMEOUT 8
+#define NBD_REPLY_QUEUE_TIMEOUT 1
 
 struct nbd_client {
 	int sock;
-	_Atomic(bool) disconnect;
-	uint32_t flags;
+	unsigned sndbuf;
+	unsigned rcvbuf;
+	size_t reply_length_limit;
+	uint16_t handshake_flags;
+	uint16_t transmission_flags;
+	uint32_t minimum_blocksize;
+	uint32_t preferred_blocksize;
+	uint32_t maximum_payload;
 	uint64_t size;
 	char const *host;
 	SSL_CTX *ssl_ctx;
 	SSL *ssl;
 	ssize_t (*send)(struct nbd_client *, void const *, size_t);
 	ssize_t (*recv)(struct nbd_client *, void *, size_t);
+	/*
+	 * The fields above are read-only during the transmission phase.  Align
+	 * the atomic below to a different cache line so it does not evict the
+	 * rest of the fields when accessed.
+	 */
+	_Atomic(bool) disconnect __aligned(CACHE_LINE_SIZE);
 };
 
 struct nbd_client *
@@ -65,11 +76,26 @@ nbd_client_alloc()
 	return client;
 }
 
+#ifndef NBD_REPLY_LENGTH_LIMIT
+#define NBD_REPLY_LENGTH_LIMIT  (4 * getpagesize()) /* arbitrary safeguard */
+#endif
+
+void
+nbd_client_init(struct nbd_client *client, SSL_CTX *ssl_ctx,
+		unsigned sndbuf, unsigned rcvbuf)
+{
+	assert(sndbuf != 0);
+	assert(rcvbuf != 0);
+	client->ssl_ctx = ssl_ctx;
+	client->sndbuf = sndbuf;
+	client->rcvbuf = rcvbuf;
+	client->reply_length_limit = NBD_REPLY_LENGTH_LIMIT;
+}
+
 void
 nbd_client_free(struct nbd_client *client)
 {
 	SSL_free(client->ssl);
-	SSL_CTX_free(client->ssl_ctx);
 	free(__DECONST(char *, client->host));
 	free(client);
 }
@@ -87,11 +113,11 @@ nbd_client_recv(struct nbd_client *client, void *buf, size_t len)
 }
 
 static int
-nbd_client_init(struct nbd_client *client, char const *host,
-		struct addrinfo *ai)
+nbd_client_socket(struct nbd_client *client, char const *host,
+		  struct addrinfo *ai)
 {
 	int sock;
-	int on;
+	int on, size;
 
 	on = 1;
 
@@ -117,11 +143,32 @@ nbd_client_init(struct nbd_client *client, char const *host,
 			       __func__);
 			return FAILURE;
 		}
+
+		size = client->sndbuf;
+		if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &size, sizeof size)
+		    == FAILURE) {
+			syslog(LOG_ERR,
+			       "%s: failed to set socket option SO_SNDBUF: %m",
+			       __func__);
+			return FAILURE;
+		}
+
+		size = client->rcvbuf;
+		if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &size, sizeof size)
+		    == FAILURE) {
+			syslog(LOG_ERR,
+			       "%s: failed to set socket option SO_RCVBUF: %m",
+			       __func__);
+			return FAILURE;
+		}
 	}
 	client->sock = sock;
+	if (client->host != NULL)
+		free(__DECONST(char *, client->host));
 	if (ai->ai_canonname != NULL)
 		host = ai->ai_canonname;
 	client->host = strdup(host);
+	assert(client->host != NULL);
 	client->send = nbd_client_send;
 	client->recv = nbd_client_recv;
 
@@ -131,7 +178,6 @@ nbd_client_init(struct nbd_client *client, char const *host,
 void
 nbd_client_close(struct nbd_client *client)
 {
-
 	close(client->sock);
 }
 
@@ -154,40 +200,47 @@ nbd_client_rights_limit(struct nbd_client *client)
 uint64_t
 nbd_client_get_size(struct nbd_client *client)
 {
-
 	return client->size;
+}
+
+void
+nbd_client_get_block_sizes(struct nbd_client *client, uint32_t *minbs,
+			   uint32_t *prefbs, uint32_t *maxpl)
+{
+	if (minbs != NULL)
+		*minbs = client->minimum_blocksize;
+	if (prefbs != NULL)
+		*prefbs = client->preferred_blocksize;
+	if (maxpl != NULL)
+		*maxpl = client->maximum_payload;
 }
 
 bool
 nbd_client_get_disconnect(struct nbd_client *client)
 {
-
-	return client->disconnect;
+	return atomic_load(&client->disconnect);
 }
 
 void
 nbd_client_set_disconnect(struct nbd_client *client, bool disconnect)
 {
-
-	client->disconnect = disconnect;
+	atomic_store(&client->disconnect, disconnect);
 }
 
 void
 nbd_client_disable_trim(struct nbd_client *client)
 {
-
-	client->flags &= ~NBD_FLAG_SEND_TRIM;
+	client->transmission_flags &= ~NBD_FLAG_SEND_TRIM;
 }
 
-int
+struct addrinfo *
 nbd_client_connect(struct nbd_client *client, cap_channel_t *capnet,
-		   char const *host, struct addrinfo *first_ai)
+		   char const *host, struct addrinfo *ai)
 {
-	struct addrinfo *ai;
 	int sock;
 
-	for (ai = first_ai; ai != NULL; ai = ai->ai_next) {
-		if (nbd_client_init(client, host, ai) == FAILURE)
+	for (; ai != NULL; ai = ai->ai_next) {
+		if (nbd_client_socket(client, host, ai) == FAILURE)
 			continue;
 		sock = client->sock;
 		if (cap_connect(capnet, sock, ai->ai_addr, ai->ai_addrlen)
@@ -197,39 +250,50 @@ nbd_client_connect(struct nbd_client *client, cap_channel_t *capnet,
 		}
 		break;
 	}
-	if (ai == NULL) {
+	if (ai == NULL)
 		syslog(LOG_ERR,
 		       "%s: failed to connect to remote server (%s): %m",
 		       __func__, host);
-		return FAILURE;
-	}
-	return SUCCESS;
+	return ai;
 }
 
 void
 nbd_client_shutdown(struct nbd_client *client)
 {
-
 	shutdown(client->sock, SHUT_RDWR);
 }
 
-static inline char const *
-nbd_client_flag_string(uint32_t flag)
+static inline const char *
+nbd_client_hflag_string(uint16_t flag)
 {
-
 	switch (flag) {
-
-#define CASE_MESSAGE(c) case c: return #c
-
-		CASE_MESSAGE(NBD_FLAG_HAS_FLAGS);
-		CASE_MESSAGE(NBD_FLAG_READ_ONLY);
-		CASE_MESSAGE(NBD_FLAG_SEND_FLUSH);
-		CASE_MESSAGE(NBD_FLAG_SEND_FUA);
-		CASE_MESSAGE(NBD_FLAG_ROTATIONAL);
-		CASE_MESSAGE(NBD_FLAG_SEND_TRIM);
-
+#define CASE_MESSAGE(c) case NBD_FLAG_ ## c: return #c
+	CASE_MESSAGE(FIXED_NEWSTYLE);
+	CASE_MESSAGE(NO_ZEROES);
 #undef CASE_MESSAGE
+	default: return NULL;
+	}
+}
 
+static inline char const *
+nbd_client_tflag_string(uint16_t flag)
+{
+	switch (flag) {
+#define CASE_MESSAGE(c) case NBD_FLAG_ ## c: return #c
+	CASE_MESSAGE(HAS_FLAGS);
+	CASE_MESSAGE(READ_ONLY);
+	CASE_MESSAGE(SEND_FLUSH);
+	CASE_MESSAGE(SEND_FUA);
+	CASE_MESSAGE(ROTATIONAL);
+	CASE_MESSAGE(SEND_TRIM);
+	CASE_MESSAGE(SEND_WRITE_ZEROES);
+	CASE_MESSAGE(SEND_DF);
+	CASE_MESSAGE(CAN_MULTI_CONN);
+	CASE_MESSAGE(SEND_RESIZE);
+	CASE_MESSAGE(SEND_CACHE);
+	CASE_MESSAGE(SEND_FAST_ZERO);
+	CASE_MESSAGE(BLOCK_STATUS_PAYLOAD);
+#undef CASE_MESSAGE
 	default: return NULL;
 	}
 }
@@ -237,71 +301,103 @@ nbd_client_flag_string(uint32_t flag)
 static inline void
 nbd_client_dump(struct nbd_client *client)
 {
-	const uint32_t Flags[] = {
+	const uint16_t HFlags[] = {
+		NBD_FLAG_FIXED_NEWSTYLE, NBD_FLAG_NO_ZEROES,
+	};
+	const uint16_t TFlags[] = {
 		NBD_FLAG_HAS_FLAGS, NBD_FLAG_READ_ONLY, NBD_FLAG_SEND_FLUSH,
 		NBD_FLAG_SEND_FUA, NBD_FLAG_ROTATIONAL, NBD_FLAG_SEND_TRIM,
+		NBD_FLAG_SEND_WRITE_ZEROES, NBD_FLAG_SEND_DF,
+		NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_SEND_RESIZE,
+		NBD_FLAG_SEND_CACHE, NBD_FLAG_SEND_FAST_ZERO,
+		NBD_FLAG_BLOCK_STATUS_PAYLOAD,
 	};
-	const size_t FlagsLen = sizeof Flags / sizeof Flags[0];
-
-	char flag_string[128], *curflag;
-	uint32_t flags;
-	size_t i, len;
+	char flags_string[256], *curflag;
 
 	syslog(LOG_DEBUG, "\tsock: %d", client->sock);
+	syslog(LOG_DEBUG, "\tsndbuf: %u", client->sndbuf);
+	syslog(LOG_DEBUG, "\trcvbuf: %u", client->rcvbuf);
+	syslog(LOG_DEBUG, "\treply_length_limit: %zu",
+	       client->reply_length_limit);
 	syslog(LOG_DEBUG, "\tdisconnect: %s",
-	       client->disconnect ? "true" : "false");
-	syslog(LOG_DEBUG, "\thost: %s", client->host);
-	flags = client->flags;
-	curflag = flag_string;
-	len = sizeof flag_string;
-	i = FlagsLen;
-	while (len && i--) {
+	       atomic_load(&client->disconnect) ? "true" : "false");
+	curflag = flags_string;
+	curflag[0] = '\0';
+	for (int i = 0; i < nitems(HFlags); i++) {
+		char number[sizeof "0xXXXX"];
 		char const *name;
-		size_t namelen, t;
-		uint32_t value;
-		bool match, last;
+		size_t len;
+		uint16_t flag;
 
-		value = Flags[i];
-		name = nbd_client_flag_string(value);
-		namelen = strlen(name);
-		match = (flags & value) != 0;
-		last = i > 0;
+		flag = HFlags[i];
+		name = nbd_client_hflag_string(flag);
+		if (name == NULL) {
+			snprintf(number, sizeof number, "%#x", flag);
+			name = number;
+		}
+		len = strlen(name) + 1;
+		assert(curflag + len + 1 - flags_string < sizeof flags_string);
 
-		assert(name != NULL);
-
-		snprintf(curflag, len, "%s%s", match ? name : "",
-			 last ? (match ? "|" : "") : "");
-
-		t = namelen + (match ? 1 : 0); // doesn't matter on last
-		curflag += t;
-		len -= t;
+		if ((client->handshake_flags & flag) != 0) {
+			sprintf(curflag, "%s,", name);
+			curflag += len;
+		}
 	}
-	syslog(LOG_DEBUG, "\tflags: %#010x [%s]", flags, flag_string);
-	syslog(LOG_DEBUG, "\tsize: %lu", client->size);
-}
+	if (curflag != flags_string)
+		*(curflag - 1) = '\0';
+	syslog(LOG_DEBUG, "\thandshake_flags: %#06x <%s>",
+	       client->handshake_flags, flags_string);
+	curflag = flags_string;
+	curflag[0] = '\0';
+	for (int i = 0; i < nitems(TFlags); i++) {
+		char number[sizeof "0xXXXX"];
+		char const *name;
+		size_t len;
+		uint16_t flag;
 
-void
-nbd_client_set_ssl_ctx(struct nbd_client *client, SSL_CTX *ssl_ctx)
-{
-	client->ssl_ctx = ssl_ctx;
+		flag = TFlags[i];
+		name = nbd_client_tflag_string(flag);
+		if (name == NULL) {
+			snprintf(number, sizeof number, "%#x", flag);
+			name = number;
+		}
+		len = strlen(name) + 1;
+		assert(curflag + len + 1 - flags_string < sizeof flags_string);
+
+		if ((client->transmission_flags & flag) != 0) {
+			sprintf(curflag, "%s,", name);
+			curflag += len;
+		}
+	}
+	if (curflag != flags_string)
+		*(curflag - 1) = '\0';
+	syslog(LOG_DEBUG, "\ttransmission_flags: %#06x <%s>",
+	       client->transmission_flags, flags_string);
+	syslog(LOG_DEBUG, "\tminimum_blocksize: %u", client->minimum_blocksize);
+	syslog(LOG_DEBUG, "\tpreferred_blocksize: %u",
+	       client->preferred_blocksize);
+	syslog(LOG_DEBUG, "\tmaximum_payload: %u", client->maximum_payload);
+	syslog(LOG_DEBUG, "\tsize: %lu", client->size);
+	syslog(LOG_DEBUG, "\thost: %s", client->host);
 }
 
 static inline void
 nbd_oldstyle_negotiation_ntoh(struct nbd_oldstyle_negotiation *handshake)
 {
-
 	handshake->size = be64toh(handshake->size);
-	handshake->flags = be32toh(handshake->flags);
+	handshake->global_flags = be16toh(handshake->global_flags);
+	handshake->export_flags = be16toh(handshake->export_flags);
 }
+
+#define EXPORT_FLAGS_VALID(flags) ((flags & NBD_FLAG_HAS_FLAGS) != 0)
 
 static inline bool
 nbd_oldstyle_negotiation_is_valid(struct nbd_oldstyle_negotiation *handshake)
 {
-
-	if (!(handshake->flags & NBD_FLAG_HAS_FLAGS)) {
+	if (!EXPORT_FLAGS_VALID(handshake->export_flags)) {
 		syslog(LOG_ERR,
-		       "%s: invalid flags: %#010x (expected low bit set)",
-		       __func__, handshake->flags);
+		       "%s: invalid export_flags: %#06x (expected low bit set)",
+		       __func__, handshake->export_flags);
 		return false;
 	}
 
@@ -311,11 +407,12 @@ nbd_oldstyle_negotiation_is_valid(struct nbd_oldstyle_negotiation *handshake)
 static inline void
 nbd_oldstyle_negotiation_dump(struct nbd_oldstyle_negotiation *handshake)
 {
-	uint32_t flags = handshake->flags;
+	uint16_t export_flags = handshake->export_flags;
 
 	syslog(LOG_DEBUG, "\tsize: %lu", handshake->size);
-	syslog(LOG_DEBUG, "\tflags: %#010x%s", flags,
-	       (flags & NBD_FLAG_HAS_FLAGS) ? "" : " (invalid)");
+	syslog(LOG_DEBUG, "\tglobal_flags: %#06x", handshake->global_flags);
+	syslog(LOG_DEBUG, "\texport_flags: %#06x%s", export_flags,
+	       EXPORT_FLAGS_VALID(export_flags) ? "" : " (invalid)");
 }
 
 static int
@@ -326,7 +423,7 @@ nbd_client_oldstyle_handshake(struct nbd_client *client)
 
 	while (true) {
 		len = client->recv(client, &handshake, sizeof handshake);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -339,9 +436,6 @@ nbd_client_oldstyle_handshake(struct nbd_client *client)
 
 	nbd_oldstyle_negotiation_ntoh(&handshake);
 
-	//syslog(LOG_DEBUG, "%s: negotiation", __func__);
-	//nbd_oldstyle_negotiation_dump(&handshake);
-
 	if (!nbd_oldstyle_negotiation_is_valid(&handshake)) {
 		syslog(LOG_ERR, "%s: invalid handshake", __func__);
 		nbd_oldstyle_negotiation_dump(&handshake);
@@ -349,17 +443,8 @@ nbd_client_oldstyle_handshake(struct nbd_client *client)
 	}
 
 	client->size = handshake.size;
-	client->flags = handshake.flags;
-
-	//syslog(LOG_DEBUG, "%s: client", __func__);
-	//nbd_client_dump(client);
-
-	if (!(handshake.flags & NBD_FLAG_SEND_FLUSH))
-		syslog(LOG_INFO,
-		       "%s: server does not support FLUSH command", __func__);
-	if (!(handshake.flags & NBD_FLAG_SEND_TRIM))
-		syslog(LOG_INFO,
-		       "%s: server does not support TRIM command", __func__);
+	client->handshake_flags = handshake.global_flags;
+	client->transmission_flags = handshake.export_flags;
 
 	return SUCCESS;
 }
@@ -367,18 +452,19 @@ nbd_client_oldstyle_handshake(struct nbd_client *client)
 static inline void
 nbd_newstyle_negotiation_ntoh(struct nbd_newstyle_negotiation *handshake)
 {
-
 	handshake->handshake_flags = be16toh(handshake->handshake_flags);
 }
 
 #define VALID_NEWSTYLE_FLAGS (NBD_FLAG_FIXED_NEWSTYLE|NBD_FLAG_NO_ZEROES)
+
+#define HANDSHAKE_FLAGS_VALID(flags) ((flags & ~VALID_NEWSTYLE_FLAGS) == 0)
 
 static inline bool
 nbd_newstyle_negotiation_is_valid(struct nbd_newstyle_negotiation *handshake)
 {
 	uint16_t flags = handshake->handshake_flags;
 
-	if (flags & ~VALID_NEWSTYLE_FLAGS)
+	if (!HANDSHAKE_FLAGS_VALID(flags))
 		syslog(LOG_ERR, "%s: ignoring unknown handshake flags: %#06x",
 		       __func__, flags);
 	if (!(flags & NBD_FLAG_FIXED_NEWSTYLE)) {
@@ -395,19 +481,14 @@ nbd_newstyle_negotiation_dump(struct nbd_newstyle_negotiation *handshake)
 {
 	uint16_t flags = handshake->handshake_flags;
 
-	syslog(LOG_DEBUG, "\thandshake_flags: %#06x [%s%s%s]%s", flags,
-	       (flags & NBD_FLAG_FIXED_NEWSTYLE) ? "FIXED_NEWSTYLE" : "",
-	       ((flags & VALID_NEWSTYLE_FLAGS)
-		== VALID_NEWSTYLE_FLAGS) ? "|" : "",
-	       (flags & NBD_FLAG_NO_ZEROES) ? "NO_ZEROES" : "",
-	       (flags & ~VALID_NEWSTYLE_FLAGS) ? " (invalid)" : "");
+	syslog(LOG_DEBUG, "\thandshake_flags: %#06x%s", flags,
+	       HANDSHAKE_FLAGS_VALID(flags) ? "" : " (invalid)");
 }
 
 static inline void
 nbd_client_flags_set_client_flags(struct nbd_client_flags *client_flags,
 				  uint32_t flags)
 {
-
 	client_flags->client_flags = htobe32(flags);
 }
 
@@ -429,7 +510,7 @@ nbd_client_newstyle_handshake(struct nbd_client *client)
 
 	while (true) {
 		len = client->recv(client, &handshake, sizeof handshake);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -456,11 +537,11 @@ nbd_client_newstyle_handshake(struct nbd_client *client)
 	if (len != sizeof response)
 		goto connection_fail;
 
-	client->flags = handshake.handshake_flags << 16;
+	client->handshake_flags = handshake.handshake_flags;
 
 	return SUCCESS;
 
- connection_fail:
+connection_fail:
 	syslog(LOG_ERR, "%s: connection failed: %m", __func__);
 	return FAILURE;
 }
@@ -468,7 +549,6 @@ nbd_client_newstyle_handshake(struct nbd_client *client)
 static inline void
 nbd_option_init(struct nbd_option *option)
 {
-
 	memset(option, 0, sizeof *option);
 	option->magic = htobe64(NBD_OPTION_MAGIC);
 }
@@ -476,14 +556,12 @@ nbd_option_init(struct nbd_option *option)
 static inline void
 nbd_option_set_option(struct nbd_option *option, uint32_t opt)
 {
-
 	option->option = htobe32(opt);
 }
 
 static inline void
 nbd_option_set_length(struct nbd_option *option, uint32_t length)
 {
-
 	option->length = htobe32(length);
 }
 
@@ -509,7 +587,7 @@ nbd_client_send_option(struct nbd_client *client,
 
 	return SUCCESS;
 
- connection_fail:
+connection_fail:
 	syslog(LOG_ERR, "%s: connection failed: %m", __func__);
 	return FAILURE;
 }
@@ -517,7 +595,6 @@ nbd_client_send_option(struct nbd_client *client,
 static inline void
 nbd_option_reply_ntoh(struct nbd_option_reply *reply)
 {
-
 	reply->magic = be64toh(reply->magic);
 	reply->option = be32toh(reply->option);
 	reply->type = be32toh(reply->type);
@@ -553,27 +630,20 @@ nbd_option_reply_is_valid(struct nbd_option_reply *reply,
 static inline char const *
 nbd_option_reply_option_string(struct nbd_option_reply *reply)
 {
-
 	switch (reply->option) {
-
 #define CASE_MESSAGE(c) case c: return #c
-#define EXTENSION " [unsupported extension]"
 #define WITHDRAWN " [withdrawn]"
-
-		CASE_MESSAGE(NBD_OPTION_EXPORT_NAME);
-		CASE_MESSAGE(NBD_OPTION_ABORT);
-		CASE_MESSAGE(NBD_OPTION_LIST);
-		CASE_MESSAGE(NBD_OPTION_PEEK_EXPORT) WITHDRAWN;
-		CASE_MESSAGE(NBD_OPTION_STARTTLS);
-		CASE_MESSAGE(NBD_OPTION_INFO) EXTENSION;
-		CASE_MESSAGE(NBD_OPTION_GO) EXTENSION;
-		CASE_MESSAGE(NBD_OPTION_STRUCTURED_REPLY) EXTENSION;
-		CASE_MESSAGE(NBD_OPTION_BLOCK_SIZE) EXTENSION;
-
+	CASE_MESSAGE(NBD_OPTION_EXPORT_NAME);
+	CASE_MESSAGE(NBD_OPTION_ABORT);
+	CASE_MESSAGE(NBD_OPTION_LIST);
+	CASE_MESSAGE(NBD_OPTION_PEEK_EXPORT) WITHDRAWN;
+	CASE_MESSAGE(NBD_OPTION_STARTTLS);
+	CASE_MESSAGE(NBD_OPTION_INFO);
+	CASE_MESSAGE(NBD_OPTION_GO);
+	CASE_MESSAGE(NBD_OPTION_STRUCTURED_REPLY);
+	CASE_MESSAGE(NBD_OPTION_BLOCK_SIZE);
 #undef WITHDRAWN
-#undef EXTENSION
 #undef CASE_MESSAGE
-
 	default: return NULL;
 	}
 }
@@ -581,27 +651,22 @@ nbd_option_reply_option_string(struct nbd_option_reply *reply)
 static inline char const *
 nbd_option_reply_type_string(struct nbd_option_reply *reply)
 {
-
 	switch (reply->type) {
-
 #define CASE_MESSAGE(c) case c: return #c
 #define UNUSED    " [unused]"
-
-		CASE_MESSAGE(NBD_REPLY_ACK);
-		CASE_MESSAGE(NBD_REPLY_SERVER);
-		CASE_MESSAGE(NBD_REPLY_INFO);
-		CASE_MESSAGE(NBD_REPLY_ERROR_UNSUPPORTED);
-		CASE_MESSAGE(NBD_REPLY_ERROR_POLICY);
-		CASE_MESSAGE(NBD_REPLY_ERROR_INVALID);
-		CASE_MESSAGE(NBD_REPLY_ERROR_PLATFORM) UNUSED;
-		CASE_MESSAGE(NBD_REPLY_ERROR_TLS_REQUIRED);
-		CASE_MESSAGE(NBD_REPLY_ERROR_UNKNOWN);
-		CASE_MESSAGE(NBD_REPLY_ERROR_SHUTDOWN);
-		CASE_MESSAGE(NBD_REPLY_ERROR_BLOCK_SIZE_REQD);
-
+	CASE_MESSAGE(NBD_REPLY_ACK);
+	CASE_MESSAGE(NBD_REPLY_SERVER);
+	CASE_MESSAGE(NBD_REPLY_INFO);
+	CASE_MESSAGE(NBD_REPLY_ERROR_UNSUPPORTED);
+	CASE_MESSAGE(NBD_REPLY_ERROR_POLICY);
+	CASE_MESSAGE(NBD_REPLY_ERROR_INVALID);
+	CASE_MESSAGE(NBD_REPLY_ERROR_PLATFORM) UNUSED;
+	CASE_MESSAGE(NBD_REPLY_ERROR_TLS_REQUIRED);
+	CASE_MESSAGE(NBD_REPLY_ERROR_UNKNOWN);
+	CASE_MESSAGE(NBD_REPLY_ERROR_SHUTDOWN);
+	CASE_MESSAGE(NBD_REPLY_ERROR_BLOCK_SIZE_REQD);
 #undef UNUSED
 #undef CASE_MESSAGE
-
 	default: return NULL;
 	}
 }
@@ -640,7 +705,7 @@ nbd_client_recv_option_reply(struct nbd_client *client,
 
 	while (true) {
 		len = client->recv(client, reply, sizeof *reply);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -669,7 +734,7 @@ nbd_client_recv_option_reply(struct nbd_client *client,
 
 	while (true) {
 		len = client->recv(client, data, recvlen);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -683,7 +748,7 @@ nbd_client_recv_option_reply(struct nbd_client *client,
 
 	return SUCCESS;
 
- connection_fail:
+connection_fail:
 	syslog(LOG_ERR, "%s: connection failed: %m", __func__);
 	return FAILURE;
 }
@@ -769,8 +834,6 @@ nbd_client_starttls(struct nbd_client *client)
 		syslog(LOG_ERR, "%s: TLS handshake failed", __func__);
 		return FAILURE;
 	}
-	/* TODO: support multiple connections */
-	SSL_CTX_free(client->ssl_ctx);
 	client->ssl_ctx = NULL;
 	client->ssl = ssl;
 	client->send = nbd_client_send_tls;
@@ -781,7 +844,6 @@ nbd_client_starttls(struct nbd_client *client)
 static inline void
 nbd_export_info_ntoh(struct nbd_export_info *info)
 {
-
 	info->size = be64toh(info->size);
 	info->transmission_flags = be16toh(info->transmission_flags);
 }
@@ -796,7 +858,7 @@ nbd_client_recv_export_info(struct nbd_client *client,
 
 	while (true) {
 		len = client->recv(client, info, SHORT_INFO_LEN);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -808,15 +870,15 @@ nbd_client_recv_export_info(struct nbd_client *client,
 	nbd_export_info_ntoh(info);
 
 	client->size = info->size;
-	client->flags |= info->transmission_flags;
+	client->transmission_flags = info->transmission_flags;
 
-	if ((client->flags >> 16) & NBD_FLAG_NO_ZEROES)
+	if ((client->handshake_flags & NBD_FLAG_NO_ZEROES) != 0)
 		return SUCCESS;
 
 	while (true) {
 		len = client->recv(client, info + SHORT_INFO_LEN,
 				   sizeof info->reserved);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -827,14 +889,14 @@ nbd_client_recv_export_info(struct nbd_client *client,
 
 	return SUCCESS;
 
- connection_fail:
+connection_fail:
 	syslog(LOG_ERR, "%s: connection failed: %m", __func__);
 	return FAILURE;
 }
 
 static int
-nbd_client_negotiate_options_fixed_newstyle(struct nbd_client *client,
-					    char const *name)
+nbd_client_negotiate_fallback(struct nbd_client *client,
+			      char const *name)
 {
 	struct nbd_option option;
 	struct nbd_export_info info;
@@ -856,26 +918,168 @@ nbd_client_negotiate_options_fixed_newstyle(struct nbd_client *client,
 		return FAILURE;
 	}
 
-	if (!(info.transmission_flags & NBD_FLAG_SEND_FLUSH))
-		syslog(LOG_INFO, "%s: server does not support FLUSH command",
-		       __func__);
-	if (!(info.transmission_flags & NBD_FLAG_SEND_TRIM))
-		syslog(LOG_INFO, "%s: server does not support TRIM command",
-		       __func__);
-
 	return SUCCESS;
+}
+
+static inline void
+nbd_info_type_ntoh(uint16_t *type)
+{
+	*type = be16toh(*type);
+}
+
+static inline void
+nbd_info_export_ntoh(struct nbd_info_export *info)
+{
+	/* type was already swapped */
+	info->size = be64toh(info->size);
+	info->transmission_flags = be16toh(info->transmission_flags);
+}
+
+static inline void
+nbd_info_block_size_ntoh(struct nbd_info_block_size *info)
+{
+	/* type was already swapped */
+	info->minimum_blocksize = be32toh(info->minimum_blocksize);
+	info->preferred_blocksize = be32toh(info->preferred_blocksize);
+	info->maximum_payload = be32toh(info->maximum_payload);
+}
+
+static int
+nbd_client_negotiate_options_fixed_newstyle(struct nbd_client *client,
+					    char const *name)
+{
+	struct nbd_option option;
+	struct nbd_info_export export_info;
+	struct nbd_info_name name_info;
+	struct nbd_info_block_size blocksize_info;
+	uint16_t info_requests[] = {
+		htobe16(NBD_INFO_EXPORT),
+		htobe16(NBD_INFO_BLOCK_SIZE),
+	};
+	uint32_t namelen = strlen(name);
+	uint32_t be_namelen = htobe32(namelen);
+	uint16_t n_info_requests = nitems(info_requests);
+	uint16_t be_n_info_requests = htobe16(n_info_requests);
+	size_t buflen = sizeof(be_namelen) + namelen +
+	    sizeof(be_n_info_requests) +
+	    sizeof(info_requests[0]) * n_info_requests;
+	uint8_t *buf, *p;
+
+	p = buf = malloc(buflen);
+	assert(buf != NULL);
+	p = mempcpy(p, &be_namelen, sizeof(be_namelen));
+	p = mempcpy(p, name, namelen);
+	p = mempcpy(p, &be_n_info_requests, sizeof(be_n_info_requests));
+	memcpy(p, info_requests, sizeof(info_requests));
+	nbd_option_init(&option);
+	nbd_option_set_option(&option, NBD_OPTION_GO);
+	nbd_option_set_length(&option, buflen);
+	if (nbd_client_send_option(client, &option, buflen, buf) == FAILURE) {
+		free(buf);
+		syslog(LOG_ERR, "%s: sending option GO failed",
+		       __func__);
+		return FAILURE;
+	}
+	free(buf);
+	for (bool saw_export = false;;) {
+		struct nbd_option_reply reply;
+		ssize_t len;
+		uint16_t info_type;
+
+		if (nbd_client_recv_option_reply(client, &option, &reply, 0,
+		                                 NULL) == FAILURE)
+			return FAILURE;
+		if (reply.type == NBD_REPLY_ACK) {
+			if (!saw_export) {
+				syslog(LOG_ERR,
+				       "%s: negotiation ended prematurely",
+				       __func__);
+				return FAILURE;
+			}
+			return SUCCESS;
+		}
+		/* TODO: check for error, receive error string */
+		if (reply.type != NBD_REPLY_INFO) {
+			char const *msg;
+
+			msg = nbd_option_reply_type_string(&reply);
+			if (msg == NULL) {
+				syslog(LOG_ERR, "%s: unknown server error (%d)",
+				       __func__, reply.type);
+			} else {
+				syslog(LOG_ERR, "%s: server error: %s",
+				       __func__, msg);
+			}
+
+			nbd_option_reply_dump(&reply);
+
+			return FAILURE;
+		}
+		/* XXX: should this be enforced for all replies? */
+		/* Don't let the network do unbounded allocations. */
+		if (reply.length > client->reply_length_limit) {
+			syslog(LOG_ERR, "%s: server reply is too big",
+			       __func__);
+
+			nbd_option_reply_dump(&reply);
+
+			return FAILURE;
+		}
+		assert(reply.length >= sizeof(info_type));
+		buf = malloc(reply.length);
+		assert(buf != NULL);
+		while (true) {
+			len = client->recv(client, buf, reply.length);
+			if (atomic_load(&client->disconnect)) {
+				free(buf);
+				return FAILURE;
+			}
+			if (len == -1 && errno == EINTR)
+				continue;
+			if (len != reply.length) {
+				free(buf);
+				syslog(LOG_ERR, "%s: connection failed: %m",
+				       __func__);
+				return FAILURE;
+			}
+			break;
+		}
+		info_type = *(uint16_t *)buf;
+		nbd_info_type_ntoh(&info_type);
+		switch (info_type) {
+		case NBD_INFO_EXPORT: {
+			struct nbd_info_export *export = (void *)buf;
+
+			nbd_info_export_ntoh(export);
+			client->size = export->size;
+			client->transmission_flags = export->transmission_flags;
+			saw_export = true;
+			break;
+		}
+		case NBD_INFO_BLOCK_SIZE: {
+			struct nbd_info_block_size *bs = (void *)buf;
+
+			nbd_info_block_size_ntoh(bs);
+			client->minimum_blocksize = bs->minimum_blocksize;
+			client->preferred_blocksize = bs->preferred_blocksize;
+			client->maximum_payload = bs->maximum_payload;
+			break;
+		}
+		default:
+			/* ignore unexpected info */
+			break;
+		}
+		free(buf);
+	}
+
+	__unreachable();
 }
 
 static inline void
 nbd_option_reply_server_ntoh(struct nbd_option_reply_server *server_export)
 {
-
 	server_export->length = be32toh(server_export->length);
 }
-
-#ifndef NBD_REPLY_SERVER_LIMIT
-#define NBD_REPLY_SERVER_LIMIT  (4 * PAGE_SIZE) /* arbitrary safeguard */
-#endif
 
 static int
 nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client,
@@ -925,7 +1129,7 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client,
 			return FAILURE;
 		}
 		/* Don't let the network do unbounded allocations. */
-		if (reply.length > NBD_REPLY_SERVER_LIMIT) {
+		if (reply.length > client->reply_length_limit) {
 			syslog(LOG_ERR, "%s: server reply is too big",
 			       __func__);
 
@@ -944,7 +1148,7 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client,
 			assert(name != NULL); /* hard to handle ENOMEM */
 			while (true) {
 				len = client->recv(client, name, resid);
-				if (client->disconnect) {
+				if (atomic_load(&client->disconnect)) {
 					free(name);
 					return FAILURE;
 				}
@@ -969,7 +1173,7 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client,
 			assert(description != NULL); /* hard to handle ENOMEM */
 			while (true) {
 				len = client->recv(client, description, resid);
-				if (client->disconnect) {
+				if (atomic_load(&client->disconnect)) {
 					free(description);
 					free(name);
 					return FAILURE;
@@ -999,7 +1203,6 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client,
 static inline void
 nbd_handshake_magic_ntoh(struct nbd_handshake_magic *handshake)
 {
-
 	handshake->magic = be64toh(handshake->magic);
 	handshake->style = be64toh(handshake->style);
 }
@@ -1007,7 +1210,6 @@ nbd_handshake_magic_ntoh(struct nbd_handshake_magic *handshake)
 static inline void
 nbd_handshake_magic_dump(struct nbd_handshake_magic *handshake)
 {
-
 	syslog(LOG_DEBUG, "\tmagic: %#018lx (expected %#018lx)",
 	       handshake->magic, NBD_MAGIC);
 	syslog(LOG_DEBUG, "\tstyle: %#018lx (expected %#018lx or %#018lx)",
@@ -1022,7 +1224,7 @@ nbd_client_negotiate(struct nbd_client *client, char const *name)
 
 	while (true) {
 		len = client->recv(client, &handshake, sizeof handshake);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -1042,7 +1244,6 @@ nbd_client_negotiate(struct nbd_client *client, char const *name)
 	}
 
 	if (handshake.style == NBD_OLDSTYLE_MAGIC) {
-
 		syslog(LOG_INFO, "%s: oldstyle handshake detected", __func__);
 
 		if (name[0] != '\0') {
@@ -1104,7 +1305,7 @@ nbd_client_list(struct nbd_client *client, nbd_client_list_cb cb, void *ctx)
 
 	while (true) {
 		len = client->recv(client, &handshake, sizeof handshake);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -1194,7 +1395,6 @@ nbd_client_abort(struct nbd_client *client)
 static inline void
 nbd_request_init(struct nbd_request *request)
 {
-
 	memset(request, 0,  sizeof *request);
 	request->magic = htobe32(NBD_REQUEST_MAGIC);
 }
@@ -1202,35 +1402,30 @@ nbd_request_init(struct nbd_request *request)
 static inline void
 nbd_request_set_flags(struct nbd_request *request, uint16_t flags)
 {
-
 	request->flags = htobe16(flags);
 }
 
 static inline void
 nbd_request_set_command(struct nbd_request *request, uint16_t command)
 {
-
 	request->command = htobe16(command);
 }
 
 static inline void
 nbd_request_set_handle(struct nbd_request *request, uint64_t handle)
 {
-
 	request->handle = htobe64(handle);
 }
 
 static inline void
 nbd_request_set_offset(struct nbd_request *request, uint64_t offset)
 {
-
 	request->offset = htobe64(offset);
 }
 
 static inline void
 nbd_request_set_length(struct nbd_request *request, uint32_t length)
 {
-
 	request->length = htobe32(length);
 }
 
@@ -1276,7 +1471,7 @@ nbd_client_send_request(struct nbd_client *client, uint16_t command,
 
 	return SUCCESS;
 
- connection_fail:
+connection_fail:
 	syslog(LOG_ERR, "%s: connection failed: %m", __func__);
 	return FAILURE;
 }
@@ -1285,7 +1480,6 @@ int
 nbd_client_send_read(struct nbd_client *client, uint64_t handle,
 		     off_t offset, size_t length)
 {
-
 	return nbd_client_send_request(client, NBD_CMD_READ, handle,
 				       offset, length, 0, NULL);
 }
@@ -1295,7 +1489,6 @@ nbd_client_send_write(struct nbd_client *client, uint64_t handle,
 		      off_t offset, size_t length,
 		      size_t datalen, uint8_t *data)
 {
-
 	return nbd_client_send_request(client, NBD_CMD_WRITE, handle,
 				       offset, length, datalen, data);
 }
@@ -1303,8 +1496,7 @@ nbd_client_send_write(struct nbd_client *client, uint64_t handle,
 int
 nbd_client_send_flush(struct nbd_client *client, uint64_t handle)
 {
-
-	if (!(client->flags & NBD_FLAG_SEND_FLUSH)) {
+	if (!(client->transmission_flags & NBD_FLAG_SEND_FLUSH)) {
 		syslog(LOG_NOTICE, "%s: unsupported FLUSH operation", __func__);
 		return EOPNOTSUPP;
 	}
@@ -1317,8 +1509,7 @@ int
 nbd_client_send_trim(struct nbd_client *client, uint64_t handle,
 		     off_t offset, size_t length)
 {
-
-	if (!(client->flags & NBD_FLAG_SEND_TRIM)) {
+	if (!(client->transmission_flags & NBD_FLAG_SEND_TRIM)) {
 		syslog(LOG_NOTICE, "%s: unsupported TRIM operation", __func__);
 		return EOPNOTSUPP;
 	}
@@ -1330,7 +1521,6 @@ nbd_client_send_trim(struct nbd_client *client, uint64_t handle,
 int
 nbd_client_send_disconnect(struct nbd_client *client)
 {
-
 	return nbd_client_send_request(client, NBD_CMD_DISCONNECT,
 				       (uint64_t)-1, 0, 0, 0, NULL);
 }
@@ -1338,7 +1528,6 @@ nbd_client_send_disconnect(struct nbd_client *client)
 static inline void
 nbd_reply_ntoh(struct nbd_reply *reply)
 {
-
 	reply->magic = be32toh(reply->magic);
 	reply->error = be32toh(reply->error);
 	reply->handle = be64toh(reply->handle);
@@ -1347,7 +1536,6 @@ nbd_reply_ntoh(struct nbd_reply *reply)
 static inline bool
 nbd_reply_is_valid(struct nbd_reply *reply)
 {
-
 	if (reply->magic != NBD_REPLY_MAGIC) {
 		syslog(LOG_ERR, "%s: invalid magic: %#010x (expected %#010x)",
 		       __func__, reply->magic, NBD_REPLY_MAGIC);
@@ -1360,23 +1548,16 @@ nbd_reply_is_valid(struct nbd_reply *reply)
 static inline char const *
 nbd_reply_error_string(struct nbd_reply *reply)
 {
-
 	switch (reply->error) {
-
 #define CASE_MESSAGE(c) case c: return #c
-#define EXTENSION " [unsupported extension]"
-
-		CASE_MESSAGE(NBD_EPERM);
-		CASE_MESSAGE(NBD_EIO);
-		CASE_MESSAGE(NBD_ENOMEM);
-		CASE_MESSAGE(NBD_EINVAL);
-		CASE_MESSAGE(NBD_ENOSPC);
-		CASE_MESSAGE(NBD_EOVERFLOW) EXTENSION;
-		CASE_MESSAGE(NBD_ESHUTDOWN);
-
-#undef EXTENSION
+	CASE_MESSAGE(NBD_EPERM);
+	CASE_MESSAGE(NBD_EIO);
+	CASE_MESSAGE(NBD_ENOMEM);
+	CASE_MESSAGE(NBD_EINVAL);
+	CASE_MESSAGE(NBD_ENOSPC);
+	CASE_MESSAGE(NBD_EOVERFLOW);
+	CASE_MESSAGE(NBD_ESHUTDOWN);
 #undef CASE_MESSAGE
-
 	default: return NULL;
 	}
 }
@@ -1406,7 +1587,7 @@ nbd_client_recv_reply_header(struct nbd_client *client, uint64_t *handle)
 
 	while (true) {
 		len = client->recv(client, &reply, sizeof reply);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;
@@ -1424,6 +1605,8 @@ nbd_client_recv_reply_header(struct nbd_client *client, uint64_t *handle)
 		goto bad_reply;
 	}
 
+	*handle = reply.handle;
+
 	switch (reply.error) {
 	case SUCCESS:
 		break;
@@ -1436,11 +1619,9 @@ nbd_client_recv_reply_header(struct nbd_client *client, uint64_t *handle)
 		goto bad_reply;
 	}
 
-	*handle = reply.handle;
-
 	return SUCCESS;
 
- bad_reply:
+bad_reply:
 	nbd_reply_dump(&reply);
 	return FAILURE;
 }
@@ -1462,7 +1643,7 @@ nbd_client_recv_reply_data(struct nbd_client *client, size_t length,
 
 	while (true) {
 		len = client->recv(client, buf, recvlen);
-		if (client->disconnect)
+		if (atomic_load(&client->disconnect))
 			return FAILURE;
 		if (len == -1 && errno == EINTR)
 			continue;

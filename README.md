@@ -34,7 +34,6 @@ case it remains running in the foreground.
 
 * Manual control (listing, naming, numbering, removal) of the device nodes
   is not yet provided by this tool.
-* The client is currently single-threaded.
 * GEOM Gate devices cannot report attributes such as `GEOM::candelete` at this
   time, which can prevent TRIM/DELETE from being used.
 
@@ -79,10 +78,10 @@ abc
 xyz
 ```
 
-Connect to an export named `xyz`:
+Connect to an export named `xyz` using four connections:
 
 ```
-# nbd-client -n xyz 10.2
+# nbd-client -c 4 -n xyz 10.2
 ggate3
 ```
 
@@ -114,5 +113,4 @@ which corresponds to the device named `ggate0`:
 ## To Do
 
 * rc scripts
-* option to drop to a less privileged user?
-* parallel connections to an export
+* option to drop to a less privileged user

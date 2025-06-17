@@ -10,10 +10,8 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-enum {
-	GGATE_DEFAULT_TIMEOUT = 0,
-	GGATE_DEFAULT_QUEUE_SIZE = 1024,
-};
+#define GGATE_DEFAULT_TIMEOUT 0
+#define GGATE_DEFAULT_QUEUE_SIZE 1024
 
 typedef struct ggate_context *ggate_context_t;
 

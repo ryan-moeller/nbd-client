@@ -10,15 +10,23 @@
 .Sh SYNOPSIS
 .Nm
 .Op Fl f
+.Op Fl c Ar connections
 .Op Fl n Ar export
+.Op Fl r Ar rcvbuf
+.Op Fl s Ar sndbuf
+.Op Fl S Ar sectorsize
 .Ar host
 .Op Ar port
 .Nm
 .Op Fl f
+.Op Fl c Ar connections
 .Op Fl n Ar export
+.Op Fl r Ar rcvbuf
+.Op Fl s Ar sndbuf
 .Op Fl A Ar cacert
 .Fl C Ar cert
 .Fl K Ar key
+.Op Fl S Ar sectorsize
 .Ar host
 .Op Ar port
 .Nm
@@ -63,8 +71,6 @@ Caveats:
 Manual control (listing, naming, numbering, removal) of the device nodes is not
 yet provided by this tool.
 .It
-The client is currently single-threaded.
-.It
 GEOM Gate devices cannot report attributes such as
 .Ql GEOM::candelete
 at this time, which can prevent TRIM/DELETE from being used.
@@ -83,9 +89,17 @@ from the name.
 If available, a default export is printed as
 .Ql [default export]
 rather than an empty string.
+.It Fl c Ar connections
+Make multiple connections to the server.
+This can help scale throughput by utilizing multiple threads.
+The default is to make one connection to the server.
 .It Fl n Ar export
 Connect to the named export.
 The default export is requested if not specified.
+.It Fl r Ar rcvbuf
+Set the receive buffer size for client sockets.
+.It Fl s Ar sndbuf
+Set the send buffer size for client sockets.
 .It Fl A Ar cacert
 Optional path to a PEM-formatted CA certificate against which TLS certificates
 are verified.
@@ -95,6 +109,9 @@ Make a TLS connection using the PEM-formatted client certificate at the given
 path.
 .It Fl K Ar key
 Make a TLS connection using the PEM-formatted client key at the given path.
+.It Fl S Ar sectorsize
+Set the GEOM Gate device sector size.
+The device size must be a multiple of the sector size.
 .El
 .Pp
 To make TLS connections, both a certificate and key must be given.
@@ -133,9 +150,10 @@ myexport
 .Ed
 .Pp
 Connect to an export named
-.Ql myexport :
+.Ql myexport
+using four connections:
 .Bd -literal -offset indent
-# nbd-client -n myexport nbdserver1
+# nbd-client -c 4 -n myexport nbdserver1
 ggate3
 .Ed
 .Pp

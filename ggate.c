@@ -11,7 +11,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
@@ -25,7 +24,6 @@
 int
 ggate_load_module(void)
 {
-
 	if (modfind("g_gate") != FAILURE)
 		return SUCCESS;
 
@@ -65,7 +63,6 @@ ggate_context_alloc(void)
 void
 ggate_context_init(struct ggate_context *ctx)
 {
-
 	ctx->ctl = -1;
 	ctx->unit = G_GATE_UNIT_AUTO;
 }
@@ -73,7 +70,6 @@ ggate_context_init(struct ggate_context *ctx)
 void
 ggate_context_free(struct ggate_context *ctx)
 {
-
 	free(ctx);
 }
 
@@ -98,7 +94,6 @@ ggate_context_open(struct ggate_context *ctx)
 void
 ggate_context_close(struct ggate_context *ctx)
 {
-
 	close(ctx->ctl);
 	ctx->ctl = -1;
 }
@@ -135,7 +130,6 @@ ggate_context_rights_limit(struct ggate_context *ctx)
 int
 ggate_context_get_unit(struct ggate_context *ctx)
 {
-
 	return ctx->unit;
 }
 
@@ -160,7 +154,6 @@ ggate_context_ioctl(struct ggate_context *ctx, uint64_t req, void *data)
 static inline void
 g_gate_ctl_create_dump(struct g_gate_ctl_create *ggioc)
 {
-
 	syslog(LOG_DEBUG, "\tgctl_version: %u", ggioc->gctl_version);
 	syslog(LOG_DEBUG, "\tgctl_mediasize: %ld", ggioc->gctl_mediasize);
 	syslog(LOG_DEBUG, "\tgctl_sectorsize: %u", ggioc->gctl_sectorsize);
@@ -223,11 +216,6 @@ ggate_context_create_device(struct ggate_context *ctx, char const *info,
 
 	if (limit_create_ioctl(ctx) == FAILURE)
 		return FAILURE;
-
-	if (unit == G_GATE_UNIT_AUTO) {
-		printf("%s%u\n", G_GATE_PROVIDER_NAME, ggioc.gctl_unit);
-		fflush(stdout);
-	}
 
 	ctx->unit = ggioc.gctl_unit;
 
