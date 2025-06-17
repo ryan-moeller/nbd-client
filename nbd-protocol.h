@@ -42,7 +42,8 @@ struct nbd_handshake_magic {
 
 struct nbd_oldstyle_negotiation {
 	uint64_t size;
-	uint32_t flags;
+	uint16_t global_flags;
+	uint16_t export_flags;
 	uint8_t reserved[124];
 } __packed;
 
@@ -165,6 +166,37 @@ struct nbd_export_info {
 	uint64_t size;
 	uint16_t transmission_flags;
 	uint8_t reserved[124];
+} __packed;
+
+
+enum {
+	NBD_INFO_EXPORT	     = 0,
+	NBD_INFO_NAME        = 1,
+	NBD_INFO_DESCRIPTION = 2,
+	NBD_INFO_BLOCK_SIZE  = 3,
+};
+
+struct nbd_info_export {
+	uint16_t type;
+	uint64_t size;
+	uint16_t transmission_flags;
+} __packed;
+
+struct nbd_info_name {
+	uint16_t type;
+	// char export_name[]; (sent separately)
+} __packed;
+
+struct nbd_info_description {
+	uint16_t type;
+	// char export_description[]; (sent separately)
+} __packed;
+
+struct nbd_info_block_size {
+	uint16_t type;
+	uint32_t minimum_blocksize;
+	uint32_t preferred_blocksize;
+	uint32_t maximum_payload;
 } __packed;
 
 

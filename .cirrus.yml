@@ -1,6 +1,6 @@
 freebsd_instance:
-  cpu: 1
-  memory: 1G
+  cpu: 4
+  memory: 2G
 
 task:
   matrix:
@@ -86,7 +86,7 @@ task:
   test_list_notls_script:
     - nbd-client -l localhost
   test_connect_notls_script:
-    - nbd-client localhost
+    - nbd-client -c ${CIRRUS_CPU} localhost
       | xargs -I @ echo GGATE=@ | tee -a ${CIRRUS_ENV}
   test_notls_script:
     - geom gate list
@@ -102,6 +102,7 @@ task:
       localhost
   test_connect_tls_script:
     - nbd-client
+      -c ${CIRRUS_CPU}
       -A ${WD}/ca-cert.pem
       -C ${WD}/client-cert.pem
       -K ${WD}/client-key.pem

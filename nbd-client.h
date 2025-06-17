@@ -18,6 +18,8 @@ struct addrinfo;
 typedef struct nbd_client *nbd_client_t;
 
 nbd_client_t nbd_client_alloc(void);
+void nbd_client_init(nbd_client_t client, SSL_CTX *ssl_ctx,
+    unsigned sndbuf, unsigned rcvbuf);
 void nbd_client_free(nbd_client_t client);
 
 void nbd_client_close(nbd_client_t client);
@@ -25,17 +27,17 @@ void nbd_client_close(nbd_client_t client);
 int nbd_client_rights_limit(nbd_client_t client);
 
 uint64_t nbd_client_get_size(nbd_client_t client);
+void nbd_client_get_block_sizes(nbd_client_t client, uint32_t *minbs,
+    uint32_t *prefbs, uint32_t *maxpl);
 
 bool nbd_client_get_disconnect(nbd_client_t client);
 void nbd_client_set_disconnect(nbd_client_t client, bool disconnect);
 
 void nbd_client_disable_trim(nbd_client_t client);
 
-int nbd_client_connect(nbd_client_t client, cap_channel_t *capnet,
+struct addrinfo *nbd_client_connect(nbd_client_t client, cap_channel_t *capnet,
     const char *host, struct addrinfo *ai);
 void nbd_client_shutdown(nbd_client_t client);
-
-void nbd_client_set_ssl_ctx(nbd_client_t client, SSL_CTX *ssl_ctx);
 
 /* Callback is responsible for freeing name/description. */
 typedef int (*nbd_client_list_cb)(void *ctx, char *name, char *description);
