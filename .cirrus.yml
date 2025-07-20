@@ -89,7 +89,7 @@ task:
     - nbd-client localhost
       | xargs -I @ echo GGATE=@ | tee -a ${CIRRUS_ENV}
   test_notls_script:
-    - ggatec list
+    - geom gate list
     - diskinfo -twic ${GGATE}
     - ggatec destroy -u ${GGATE##ggate}
     # Unset the GGATE variable in the env.
@@ -108,7 +108,7 @@ task:
       localhost
       | xargs -I @ echo GGATE=@ | tee -a ${CIRRUS_ENV}
   test_tls_script:
-    - ggatec list
+    - geom gate list
     - diskinfo -twic ${GGATE}
     - ggatec destroy -u ${GGATE##ggate}
     # Unset the GGATE variable in the env.
