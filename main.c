@@ -764,7 +764,7 @@ main(int argc, char *argv[])
 	if (ggate_context_create_device(ggate, ident, size,
 					DEFAULT_SECTOR_SIZE,
 					DEFAULT_GGATE_FLAGS) == FAILURE) {
-		syslog(LOG_ERR, "%s:failed to create ggate device", __func__);
+		syslog(LOG_ERR, "%s: failed to create ggate device", __func__);
 		goto destroy;
 	}
 
