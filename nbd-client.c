@@ -740,6 +740,7 @@ nbd_client_starttls(struct nbd_client *client)
 		       __func__);
 		return FAILURE;
 	}
+	/* TODO: check for error, receive error string */
 	if (reply.type != NBD_REPLY_ACK) {
 		syslog(LOG_ERR, "%s: server does not support TLS", __func__);
 		return FAILURE;
@@ -908,6 +909,7 @@ nbd_client_negotiate_list_fixed_newstyle(struct nbd_client *client,
 		}
 		if (reply.type == NBD_REPLY_ACK)
 			break;
+		/* TODO: check for error, receive error string */
 		if (reply.type != NBD_REPLY_SERVER) {
 			char const *msg;
 
@@ -1171,6 +1173,7 @@ nbd_client_abort(struct nbd_client *client)
 		       __func__);
 		return FAILURE;
 	}
+	/* TODO: check for error, receive error string */
 	if (reply.type != NBD_REPLY_ACK) {
 		char const *msg;
 
