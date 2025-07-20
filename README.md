@@ -35,6 +35,8 @@ case it remains running in the foreground.
 * Manual control (listing, naming, numbering, removal) of the device nodes
   is not yet provided by this tool.
 * The client is currently single-threaded.
+* GEOM Gate devices cannot report attributes such as `GEOM::candelete` at this
+  time, which can prevent TRIM/DELETE from being used.
 
 ## Prerequisites
 
