@@ -23,7 +23,7 @@
 #include "ggate.h"
 
 int
-ggate_load_module()
+ggate_load_module(void)
 {
 
 	if (modfind("g_gate") != FAILURE)
@@ -48,7 +48,7 @@ struct ggate_context {
 };
 
 struct ggate_context *
-ggate_context_alloc()
+ggate_context_alloc(void)
 {
 	struct ggate_context *ctx;
 

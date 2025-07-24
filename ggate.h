@@ -17,9 +17,9 @@ enum {
 
 typedef struct ggate_context *ggate_context_t;
 
-int ggate_load_module();
+int ggate_load_module(void);
 
-ggate_context_t ggate_context_alloc();
+ggate_context_t ggate_context_alloc(void);
 void ggate_context_init(ggate_context_t ctx);
 void ggate_context_free(ggate_context_t ctx);
 
