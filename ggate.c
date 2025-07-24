@@ -123,8 +123,7 @@ ggate_context_rights_limit(struct ggate_context *ctx)
 		return FAILURE;
 	}
 
-	if (cap_ioctls_limit(ctl, cmds, sizeof cmds / sizeof cmds[0])
-	    == FAILURE) {
+	if (cap_ioctls_limit(ctl, cmds, nitems(cmds)) == FAILURE) {
 		syslog(LOG_ERR, "%s: failed to limit ioctls (/dev/%s): %m",
 		       __func__, G_GATE_CTL_NAME);
 		return FAILURE;
@@ -183,8 +182,7 @@ limit_create_ioctl(struct ggate_context *ctx)
 		G_GATE_CMD_START, G_GATE_CMD_DONE,
 	};
 
-	if (cap_ioctls_limit(ctx->ctl, cmds, sizeof cmds / sizeof cmds[0])
-	    == FAILURE) {
+	if (cap_ioctls_limit(ctx->ctl, cmds, nitems(cmds)) == FAILURE) {
 		syslog(LOG_ERR, "%s: failed to limit ioctls (/dev/%s): %m",
 		       __func__, G_GATE_CTL_NAME);
 		return FAILURE;
