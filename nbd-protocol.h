@@ -7,7 +7,6 @@
 #ifndef _NBD_PROTOCOL_H_
 #define _NBD_PROTOCOL_H_
 
-#include <sys/cdefs.h>
 #include <sys/types.h>
 
 /**
@@ -99,7 +98,7 @@ enum {
 	NBD_OPTION_EXPORT_NAME      = 1,
 	NBD_OPTION_ABORT            = 2,
 	NBD_OPTION_LIST             = 3,
-	NBD_OPTION_PEEK_EXPORT      = 4, // withdrawn
+	NBD_OPTION_PEEK_EXPORT      = 4, /* withdrawn */
 	NBD_OPTION_STARTTLS         = 5,
 	NBD_OPTION_INFO             = 6,
 	NBD_OPTION_GO               = 7,
@@ -111,7 +110,7 @@ struct nbd_option {
 	uint64_t magic;
 	uint32_t option;
 	uint32_t length;
-	// uint8_t data[]; (sent separately)
+	/* uint8_t data[]; (sent separately) */
 } __packed;
 
 
@@ -126,7 +125,7 @@ enum {
 	NBD_REPLY_ERROR_UNSUPPORTED     = (1 | NBD_REPLY_ERROR),
 	NBD_REPLY_ERROR_POLICY          = (2 | NBD_REPLY_ERROR),
 	NBD_REPLY_ERROR_INVALID         = (3 | NBD_REPLY_ERROR),
-	NBD_REPLY_ERROR_PLATFORM        = (4 | NBD_REPLY_ERROR), // unused
+	NBD_REPLY_ERROR_PLATFORM        = (4 | NBD_REPLY_ERROR), /* unused */
 	NBD_REPLY_ERROR_TLS_REQUIRED    = (5 | NBD_REPLY_ERROR),
 	NBD_REPLY_ERROR_UNKNOWN         = (6 | NBD_REPLY_ERROR),
 	NBD_REPLY_ERROR_SHUTDOWN        = (7 | NBD_REPLY_ERROR),
@@ -138,13 +137,13 @@ struct nbd_option_reply {
 	uint32_t option;
 	int32_t type;
 	uint32_t length;
-	// uint8_t data[]; (sent separately)
+	/* uint8_t data[]; (sent separately) */
 } __packed;
 
 
 struct nbd_option_reply_server {
 	uint32_t length;
-	// char export_name[]; (sent separately)
+	/* char export_name[]; (sent separately) */
 } __packed;
 
 
@@ -199,7 +198,7 @@ struct nbd_export_info {
 #define NBD_CMD_FLAG_DF          (1 << 2)
 #define NBD_CMD_FLAG_REQ_ONE     (1 << 3)
 #define NBD_CMD_FLAG_FAST_ZERO   (1 << 4)
-#define NBD_CMD_FLAG_PAYLOAD_LEN (1 << 5) // experimental EXTENDED_HEADERS
+#define NBD_CMD_FLAG_PAYLOAD_LEN (1 << 5) /* experimental EXTENDED_HEADERS */
 
 enum {
 	NBD_CMD_READ       = 0,
@@ -216,7 +215,7 @@ struct nbd_request {
 	uint64_t handle;
 	uint64_t offset;
 	uint32_t length;
-	// uint8_t data[]; (sent separately)
+	/* uint8_t data[]; (sent separately) */
 } __packed;
 
 
@@ -236,7 +235,7 @@ struct nbd_reply {
 	uint32_t magic;
 	uint32_t error;
 	uint64_t handle;
-	// uint8_t data[]; (sent separately)
+	/* uint8_t data[]; (sent separately) */
 } __packed;
 
 
@@ -248,10 +247,10 @@ enum {
 	NBD_REPLY_TYPE_NONE             = 0,
 	NBD_REPLY_TYPE_OFFSET_DATA      = 1,
 	NBD_REPLY_TYPE_OFFSET_HOLE      = 2,
-	// 3 unused
-	// 4 unused
+	/* 3 unused */
+	/* 4 unused */
 	NBD_REPLY_TYPE_BLOCK_STATUS     = 5,
-	NBD_REPLY_TYPE_BLOCK_STATUS_EXT = 6, // experimental EXTENDED_HEADERS
+	NBD_REPLY_TYPE_BLOCK_STATUS_EXT = 6, /* experimental EXTENDED_HEADERS */
 
 	NBD_REPLY_TYPE_ERROR_BIT    = (1 << 15),
 	NBD_REPLY_TYPE_ERROR        = (1 | NBD_REPLY_TYPE_ERROR_BIT),
@@ -264,12 +263,12 @@ struct nbd_structured_reply {
 	uint16_t type;
 	uint64_t handle;
 	uint32_t length;
-	// uint8_t data[]; (sent separately)
+	/* uint8_t data[]; (sent separately) */
 } __packed;
 
 struct nbd_reply_offset_data {
 	uint64_t offset;
-	// uint8_t data[]; (sent separately)
+	/* uint8_t data[]; (sent separately) */
 } __packed;
 
 struct nbd_reply_offset_hole {
@@ -279,7 +278,7 @@ struct nbd_reply_offset_hole {
 
 struct nbd_reply_block_status {
 	uint32_t context;
-	// struct nbd_reply_block_status_descriptor descs[]; (sent separately)
+	/* struct nbd_reply_block_status_descriptor descs[]; (sent separately) */
 } __packed;
 
 struct nbd_reply_block_status_descriptor {
@@ -290,11 +289,11 @@ struct nbd_reply_block_status_descriptor {
 struct nbd_reply_error {
 	uint32_t error;
 	uint16_t length;
-	// char message[]; (sent separately)
+	/* char message[]; (sent separately) */
 } __packed;
 
 struct nbd_reply_error_offset {
 	uint64_t offset;
 } __packed;
 
-#endif /* #ifndef _NBD_PROTOCOL_H_ */
+#endif /* _NBD_PROTOCOL_H_ */

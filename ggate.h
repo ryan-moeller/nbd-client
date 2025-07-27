@@ -10,10 +10,8 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-enum {
-	GGATE_DEFAULT_TIMEOUT = 0,
-	GGATE_DEFAULT_QUEUE_SIZE = 1024,
-};
+#define GGATE_DEFAULT_TIMEOUT 0
+#define GGATE_DEFAULT_QUEUE_SIZE 1024
 
 typedef struct ggate_context *ggate_context_t;
 
@@ -32,10 +30,9 @@ int ggate_context_get_unit(ggate_context_t ctx);
 
 int ggate_context_ioctl(ggate_context_t ctx, uint64_t req, void *data);
 
-int ggate_context_create_device(ggate_context_t ctx, char const *info,
-				off_t mediasize, uint32_t sectorsize,
-				uint32_t flags);
+int ggate_context_create_device(ggate_context_t ctx, const char *info,
+    off_t mediasize, uint32_t sectorsize, uint32_t flags);
 int ggate_context_destroy_device(ggate_context_t ctx, bool force);
 int ggate_context_cancel(ggate_context_t ctx, uintptr_t seq);
 
-#endif /* #ifndef _GGATE_H_ */
+#endif /* _GGATE_H_ */
