@@ -11,7 +11,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
@@ -196,10 +195,6 @@ ggate_context_create_device(struct ggate_context *ctx, const char *info,
 	}
 	if (limit_create_ioctl(ctx) == FAILURE)
 		return (FAILURE);
-	if (ctx->unit == G_GATE_UNIT_AUTO) {
-		printf("%s%u\n", G_GATE_PROVIDER_NAME, ggioc.gctl_unit);
-		fflush(stdout);
-	}
 	ctx->unit = ggioc.gctl_unit;
 	return (SUCCESS);
 }

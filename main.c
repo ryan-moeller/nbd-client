@@ -426,7 +426,7 @@ main(int argc, char *argv[])
 	struct addrinfo hints, *ai;
 	uint64_t size;
 	bool daemonize, list;
-	int result, retval;
+	int result, retval, unit;
 
 	retval = EXIT_FAILURE;
 	name = "";
@@ -673,6 +673,10 @@ main(int argc, char *argv[])
 		syslog(LOG_ERR, "%s: failed to create ggate device", __func__);
 		goto destroy;
 	}
+
+	unit = ggate_context_get_unit(ggate);
+	printf("%s%d\n", G_GATE_PROVIDER_NAME, unit);
+	fflush(stdout);
 
 	if (daemonize) {
 		/*
