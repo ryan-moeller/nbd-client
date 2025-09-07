@@ -1,8 +1,7 @@
-freebsd_instance:
-  cpu: 4
-  memory: 2G
-
 task:
+  freebsd_instance:
+    cpu: 4
+    memory: 2G
   matrix:
     - name: releases/amd64/13.5-RELEASE
       freebsd_instance:
@@ -114,3 +113,82 @@ task:
     - ggatec destroy -u ${GGATE##ggate}
     # Unset the GGATE variable in the env.
     - set -i '' -e '/^GGATE=/d' ${CIRRUS_ENV}
+
+task:
+  only_if: ${CIRRUS_TAG} != '' && ${CIRRUS_REPO_FULL_NAME} == 'ryan-moeller/nbd-client'
+  name: release/draft
+  depends_on:
+    - releases/amd64/13.5-RELEASE
+    - releases/amd64/14.3-RELEASE
+    - releases/amd64/15.0-ALPHA1
+  freebsd_instance:
+    cpu: 1
+    memory: 256M
+    image_family: freebsd-14-3
+  stateful: true
+  env:
+    GH_TOKEN: ENCRYPTED[4469f1319b168d2918934cc22748f162711dccc6d46a9a712d29e53c3493a15ba8dc2c73a7b5b27ddf468d609a6830f9]
+  script:
+    - pkg install -y gh
+    - gh release create ${CIRRUS_TAG} --draft --prerelease
+
+task:
+  only_if: ${CIRRUS_TAG} != '' && ${CIRRUS_REPO_FULL_NAME} == 'ryan-moeller/nbd-client'
+  depends_on: release/draft
+  freebsd_instance:
+    cpu: 2
+    memory: 1G
+  matrix:
+    - name: pkg/releases/amd64/13.5-RELEASE
+      freebsd_instance:
+        image_family: freebsd-13-5
+    - name: pkg/releases/amd64/14.3-RELEASE
+      freebsd_instance:
+        image_family: freebsd-14-3
+    - name: pkg/releases/amd64/15.0-ALPHA1
+      freebsd_instance:
+        image_family: freebsd-15-0
+  stateful: true
+  env:
+    GH_TOKEN: ENCRYPTED[4469f1319b168d2918934cc22748f162711dccc6d46a9a712d29e53c3493a15ba8dc2c73a7b5b27ddf468d609a6830f9]
+    PKG_FILE: nbd-client-${CIRRUS_TAG}.pkg
+  manifest_preamble_file:
+    path: MANIFEST
+    from_contents: |
+      name nbd-client
+      origin ryan-moeller/nbd-client
+      comment Userland NBD client for FreeBSD GEOM Gate class
+      desc <<EOD
+      The Network Block Device is a Linux-originated lightweight block access protocol that allows one to export a block device to a client.
+
+      This client is designed to run on top of FreeBSD's GEOM Gate device driver, keeping the network client in a userland daemon rather than in a kernel module.
+
+      Casper is used to sandbox the DNS lookup of the server host and the socket connection to the server, and Capsicum is used to limit the capabilities of the ggate ctl descriptor and the client socket once connected.
+
+      OpenSSL is used for TLS connections.
+      EOD
+      www https://github.com/ryan-moeller/nbd-client
+      maintainer rmoeller.dev@gmail.com
+      licenses [ BSD2CLAUSE ]
+      prefix /usr/local
+  package_script:
+    - make -j${CIRRUS_CPU}
+    - mkdir -p stage/usr/local/sbin stage/usr/local/share/man/man8
+    - make DESTDIR=stage/usr/local install
+    - echo "version ${CIRRUS_TAG}" >>MANIFEST
+    - echo "files {" >>MANIFEST
+    - find stage -type f -exec sha256sum '{}' \; |
+      awk '{sub(/^stage/, "", $2); print $2, "\""$1"\""}' >>MANIFEST
+    - echo "}" >>MANIFEST
+    - cat MANIFEST
+    - pkg create -r stage -M MANIFEST -v
+  upload_script:
+    - pkg install -y gh
+    - | # to escape the ': ' in the headers below
+      gh api \
+      --method POST \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      $(gh release view ${CIRRUS_TAG} --json uploadUrl --jq .uploadUrl | sed 's/{.*//') \
+      --field name=${CIRRUS_TASK_NAME#pkg/}/${PKG_FILE} \
+      --input ${PKG_FILE} # docs saying -f '@example.zip' are wrong (github/docs#34086)
