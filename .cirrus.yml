@@ -17,7 +17,7 @@ task:
   env:
     WD: /tmp/wd
     PATH: /usr/local/sbin:${PATH}
-  setup_secript:
+  setup_script:
     - mkdir ${WD}
   build_script:
     - make
