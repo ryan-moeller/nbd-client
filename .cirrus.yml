@@ -20,7 +20,7 @@ task:
   setup_script:
     - mkdir ${WD}
   build_script:
-    - make
+    - make -j${CIRRUS_CPU}
     - make install
   manlint_script:
     - make manlint
