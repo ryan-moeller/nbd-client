@@ -95,7 +95,7 @@ task:
   test_list_notls_script:
     - nbd-client -l localhost
   test_connect_notls_script:
-    - nbd-client -c ${CIRRUS_CPU} localhost
+    - nbd-client -c ${CIRRUS_CPU} -S 4096 localhost
       | xargs -I @ echo GGATE=@ | tee -a ${CIRRUS_ENV}
   test_notls_script:
     - geom gate list
@@ -115,6 +115,7 @@ task:
       -A ${WD}/ca-cert.pem
       -C ${WD}/client-cert.pem
       -K ${WD}/client-key.pem
+      -S 4096
       localhost
       | xargs -I @ echo GGATE=@ | tee -a ${CIRRUS_ENV}
   test_tls_script:
