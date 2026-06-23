@@ -1,9 +1,5 @@
 # FreeBSD GEOM Gate NBD Client
 
-[![13.5-RELEASE Build Status](https://api.cirrus-ci.com/github/ryan-moeller/nbd-client.svg?branch=main&task=releases/amd64/13.5-RELEASE)](https://cirrus-ci.com/github/ryan-moeller/nbd-client)
-[![14.4-RELEASE Build Status](https://api.cirrus-ci.com/github/ryan-moeller/nbd-client.svg?branch=main&task=releases/amd64/14.4-RELEASE)](https://cirrus-ci.com/github/ryan-moeller/nbd-client)
-[![15.0-RELEASE Build Status](https://api.cirrus-ci.com/github/ryan-moeller/nbd-client.svg?branch=main&task=releases/amd64/15.0-RELEASE)](https://cirrus-ci.com/github/ryan-moeller/nbd-client)
-
 ## NOTICE
 
 See https://github.com/ryan-moeller/kernel-nbd-client for a new and improved
