@@ -1,5 +1,7 @@
 # FreeBSD GEOM Gate NBD Client
 
+[![FreeBSD 15.1](https://github.com/ryan-moeller/nbd-client/workflows/FreeBSD%2015.1/badge.svg)](https://github.com/ryan-moeller/nbd-client/actions/workflows/test.yml)
+
 ## NOTICE
 
 See https://github.com/ryan-moeller/kernel-nbd-client for a new and improved
