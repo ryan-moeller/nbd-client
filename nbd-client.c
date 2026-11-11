@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2025 Ryan Moeller
+ * Copyright (c) 2016-2026 Ryan Moeller
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
