@@ -820,7 +820,7 @@ nbd_client_recv_export_info(struct nbd_client *client,
 	if ((client->handshake_flags & NBD_FLAG_NO_ZEROES) != 0)
 		return (SUCCESS);
 	while (true) {
-		len = client->recv(client, info + SHORT_INFO_LEN,
+		len = client->recv(client, info->reserved,
 		    sizeof(info->reserved));
 		if (atomic_load(&client->disconnect))
 			return (FAILURE);
